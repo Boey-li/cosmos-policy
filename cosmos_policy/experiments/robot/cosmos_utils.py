@@ -1117,7 +1117,7 @@ def get_action(
             seed=seed,
             is_negative_prompt=False,  # Negative prompt is for CFG
             use_variance_scale=cfg.use_variance_scale,  # Whether to vary the magnitude of the initial noise - increases diversity slightly in generations
-            return_orig_clean_latent_frames=True,  # Return the original (pre-injection) latent frames - needed for future image visualizations
+            return_orig_clean_latent_frames=True,       # Return the original (pre-injection) latent frames - needed for future image visualizations
         )  # (B, C'=16, T', H'=28, W'=28)
 
         # Extract the predicted action chunk from the generated sample

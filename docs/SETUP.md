@@ -44,4 +44,4 @@ docker run \
 
 ## Running an Example
 
-Once you are inside the container, you can run (1) the Quick Start steps in the [README](README.md) and (2) the LIBERO or RoboCasa evaluation commands (see [LIBERO.md](LIBERO.md) and [ROBOCASA.md](ROBOCASA.md)).
+Once you are inside the container, you can run (1) the Quick Start steps in the [README](../README.md) and (2) the LIBERO or RoboCasa evaluation commands (see [LIBERO.md](LIBERO.md) and [ROBOCASA.md](ROBOCASA.md)).
