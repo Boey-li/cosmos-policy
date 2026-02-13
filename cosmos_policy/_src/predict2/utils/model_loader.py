@@ -211,7 +211,20 @@ def load_model_state_dict_from_checkpoint(
         else:
             cur_key_ckpt_full_path = os.path.join(s3_checkpoint_dir, "model")
     else:
-        cur_key_ckpt_full_path = s3_checkpoint_dir
+        # For local paths, handle DCP format by ensuring path points to model subdirectory
+        if checkpoint_format == "dcp":
+            # If path doesn't end with /model, check if it's an iteration directory and append /model
+            if not s3_checkpoint_dir.rstrip("/").endswith("/model"):
+                # Check if it's an iteration directory (contains iter_XXXXX pattern)
+                if "iter_" in s3_checkpoint_dir:
+                    cur_key_ckpt_full_path = os.path.join(s3_checkpoint_dir, "model")
+                else:
+                    # Assume it's already pointing to the model directory or needs /model appended
+                    cur_key_ckpt_full_path = os.path.join(s3_checkpoint_dir, "model") if os.path.isdir(s3_checkpoint_dir) else s3_checkpoint_dir
+            else:
+                cur_key_ckpt_full_path = s3_checkpoint_dir
+        else:
+            cur_key_ckpt_full_path = s3_checkpoint_dir
 
     from cosmos_policy._src.imaginaire.utils.checkpoint_db import get_checkpoint_path
 
@@ -221,7 +234,23 @@ def load_model_state_dict_from_checkpoint(
     if SMOKE:
         return model
 
-    if load_from_local:
+    # For DCP format, use DCP loader even when load_from_local=True
+    if load_from_local and checkpoint_format == "dcp":
+        # Use DCP loader for local DCP checkpoints
+        log.info(f"Loading DCP checkpoint from local path: {local_s3_ckpt_fp}")
+        checkpointer = DistributedCheckpointer(config.checkpoint, config.job, callbacks=None, disable_async=True)
+        _model_wrapper = ModelWrapper(
+            model,
+            load_ema_to_reg=load_ema_to_reg,
+        )
+        _state_dict = _model_wrapper.state_dict()
+        storage_reader = checkpointer.get_storage_reader(local_s3_ckpt_fp)
+        load_planner = DefaultLoadPlanner(allow_partial_load=True)
+        dcp_load_state_dict(_state_dict, storage_reader, load_planner)
+        _model_wrapper.load_state_dict(_state_dict)
+        # Synchronize model states from rank 0 to all other ranks
+        distributed.sync_model_states(model, src=0)
+    elif load_from_local:
         # Load on rank0 only and broadcast
         if distributed.is_rank0():
             log.info(f"Loading model cached locally from {local_s3_ckpt_fp}")

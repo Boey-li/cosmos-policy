@@ -56,7 +56,12 @@ def init() -> int | None:
     local_rank = int(os.getenv("LOCAL_RANK", 0))
     try:
         device = Device(local_rank)
-        os.sched_setaffinity(0, device.get_cpu_affinity())
+        try:
+            os.sched_setaffinity(0, device.get_cpu_affinity())
+        except OSError as e:
+            # In SLURM or other managed environments, CPU affinity may already be set
+            # and cannot be changed, or the CPU IDs may not be valid for this process
+            log.warning(f"Failed to set CPU affinity: {e}")
     except pynvml.NVMLError as e:
         log.warning(f"Failed to set device affinity: {e}")
     # Set up NCCL communication.

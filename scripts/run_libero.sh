@@ -1,7 +1,8 @@
 uv run --extra cu128 --group libero --python 3.10 \
   python -m cosmos_policy.experiments.robot.libero.run_libero_eval \
     --config cosmos_predict2_2b_480p_libero__inference_only \
-    --ckpt_path nvidia/Cosmos-Policy-LIBERO-Predict2-2B \
+    --ckpt_path /coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/logs/cosmos_policy/cosmos_v2_finetune/cosmos_predict2_2b_480p_libero_one_demo_one_episode/checkpoints/iter_000000005 \
+    --config_file cosmos_policy/config/config.py \
     --config_file cosmos_policy/config/config.py \
     --use_wrist_image True \
     --use_proprio True \
@@ -29,3 +30,5 @@ uv run --extra cu128 --group libero --python 3.10 \
     --num_denoising_steps_future_state 1 \
     --num_denoising_steps_value 1 \
     --num_trials_per_task 1
+  
+# --ckpt_path nvidia/Cosmos-Policy-LIBERO-Predict2-2B

@@ -78,6 +78,8 @@ class LIBERODataset(Dataset):
         treat_success_rollouts_as_demos: bool = False,
         return_value_function_returns: bool = True,
         gamma: float = 0.99,
+        max_demos: int = None,
+        max_rollout_episodes: int = None,
     ):
         """
         Initialize LIBERO dataset for training.
@@ -103,6 +105,8 @@ class LIBERODataset(Dataset):
             treat_success_rollouts_as_demos (bool): If True, copy successful rollout episodes into demonstration dataset (self.data)
             return_value_function_returns (bool): If True, returns value function returns for rollout episodes
             gamma (float): Discount factor for value function returns
+            max_demos (int): Maximum number of demos to load (None = load all)
+            max_rollout_episodes (int): Maximum number of rollout episodes to load (None = load all)
         """
         self.data_dir = data_dir
         self.chunk_size = chunk_size
@@ -123,6 +127,8 @@ class LIBERODataset(Dataset):
         self.treat_success_rollouts_as_demos = treat_success_rollouts_as_demos
         self.return_value_function_returns = return_value_function_returns
         self.gamma = gamma
+        self.max_demos = max_demos
+        self.max_rollout_episodes = max_rollout_episodes
 
         assert self.use_wrist_images or self.use_third_person_images, (
             "Must use at least one of wrist images or third-person images!"
@@ -135,6 +141,10 @@ class LIBERODataset(Dataset):
         if os.environ.get("DEBUGGING", "False").lower() == "true":
             hdf5_files = hdf5_files[:1]
 
+        # Limit HDF5 files for demos if max_demos is set
+        if self.max_demos is not None and self.max_demos > 0:
+            hdf5_files = hdf5_files[:1]  # Only use first file when limiting demos
+
         # Placeholder list for rollout files (may be empty)
         rollout_hdf5_files = []
         if self.rollout_data_dir:
@@ -142,6 +152,9 @@ class LIBERODataset(Dataset):
                 f"Error: Rollout data directory '{self.rollout_data_dir}' does not exist."
             )
             rollout_hdf5_files = get_hdf5_files(self.rollout_data_dir)
+            # Limit rollout episodes if max_rollout_episodes is set
+            if self.max_rollout_episodes is not None and self.max_rollout_episodes > 0:
+                rollout_hdf5_files = rollout_hdf5_files[:self.max_rollout_episodes]
 
         # Load all episodes into RAM
         # Save dataset in this structure:
@@ -169,13 +182,18 @@ class LIBERODataset(Dataset):
         # Populated later in `_build_step_index_mapping()`
         self._suite_to_step_indices = {}
         if self.demonstration_sampling_prob > 0:  # Only load demos if they are used
+            demo_count = 0
             for file in tqdm(hdf5_files):
+                if self.max_demos is not None and demo_count >= self.max_demos:
+                    break
                 with h5py.File(file, "r") as f:
                     # Get demo keys and sort them numerically ("demo_0", "demo_1", ...)
                     demo_keys_list = list(f["data"].keys())
                     sorted_demo_keys = sorted(demo_keys_list, key=lambda x: int(x.split("_")[1]))
 
                     for demo_key in tqdm(sorted_demo_keys):
+                        if self.max_demos is not None and demo_count >= self.max_demos:
+                            break
                         # Determine whether the dataset stores raw RGB frames or JPEG bytes
                         obs_group = f[f"data/{demo_key}/obs"]
                         # Agent-view (third-person) images
@@ -232,6 +250,10 @@ class LIBERODataset(Dataset):
                         self.num_episodes += 1
                         # Update number of steps
                         self.num_steps += num_steps
+                        # Update demo count
+                        demo_count += 1
+                        if self.max_demos is not None and demo_count >= self.max_demos:
+                            break
 
         # Build mapping from global step index to episode step
         self._build_step_index_mapping()

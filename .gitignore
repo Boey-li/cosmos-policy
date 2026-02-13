@@ -6,3 +6,6 @@
 .cursor
 LIBERO-Cosmos-Policy
 rollouts/*
+tmp/*
+logs/*
+**/logs/*
