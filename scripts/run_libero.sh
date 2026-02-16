@@ -1,7 +1,7 @@
 uv run --extra cu128 --group libero --python 3.10 \
   python -m cosmos_policy.experiments.robot.libero.run_libero_eval \
     --config cosmos_predict2_2b_480p_libero__inference_only \
-    --ckpt_path /coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/logs/cosmos_policy/cosmos_v2_finetune/cosmos_predict2_2b_480p_libero_one_demo_one_episode/checkpoints/iter_000000005 \
+    --ckpt_path /coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/logs/cosmos_policy/cosmos_v2_finetune/cosmos_predict2_2b_480p_libero_one_demo_one_episode/checkpoints/iter_000050000 \
     --config_file cosmos_policy/config/config.py \
     --config_file cosmos_policy/config/config.py \
     --use_wrist_image True \
@@ -21,7 +21,7 @@ uv run --extra cu128 --group libero --python 3.10 \
     --seed 195 \
     --use_variance_scale False \
     --deterministic True \
-    --run_id_note chkpt45000--5stepAct--seed195--deterministic \
+    --run_id_note chkpt50K--5stepAct--seed195--deterministic \
     --ar_future_prediction False \
     --ar_value_prediction False \
     --use_jpeg_compression True \

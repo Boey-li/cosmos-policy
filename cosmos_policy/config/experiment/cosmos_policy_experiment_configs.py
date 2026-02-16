@@ -243,8 +243,8 @@ cosmos_predict2_2b_480p_libero_one_demo_one_episode = LazyDict(
                 ),
             ),
             run_validation=False,
-            logging_iter=1,
-            max_iter=5,  # Reduced for testing with limited data
+            logging_iter=100,
+            max_iter=100000,  # Reduced for testing with limited data
             straggler_detection=dict(
                 enabled=False,
             ),
@@ -303,7 +303,7 @@ cosmos_predict2_2b_480p_libero_one_demo_one_episode = LazyDict(
             load_path=get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
             load_training_state=False,  # This means do not load train state from the base checkpoint above (load_path); but when resuming this job, will load train state
             strict_resume=False,
-            save_iter=1000,
+            save_iter=10000,
             load_ema_to_reg=True,
             load_from_object_store=dict(
                 enabled=False,

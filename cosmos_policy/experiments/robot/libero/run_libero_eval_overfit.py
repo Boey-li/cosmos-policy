@@ -14,96 +14,33 @@
 # limitations under the License.
 
 """
-run_libero_eval.py
+run_libero_eval_overfit.py
 
-Evaluates a trained policy in a LIBERO simulation benchmark task suite.
+Evaluates a trained policy on the training dataset episodes (overfitting evaluation).
+This script uses the dataset configuration directly from the training config, including
+its dataset statistics and T5 embeddings, to perform evaluation on the training data.
 
-Adapted from: https://github.com/user/openvla-oft/blob/main/experiments/robot/libero/run_libero_eval.py
-
-Parallel Inference:
-    To enable parallel inference across multiple GPUs, use:
-        --use_parallel_inference True
-        --available_gpus "0,1,2,3"
-        --num_queries_best_of_n 4
-
-    This will run model queries in parallel across the specified GPUs using torch.multiprocessing, which can
-    significantly speed up evaluation when using value functions that require multiple queries per action.
-
-    Requirements:
-    - Multiple GPUs must be available
-    - CUDA must be properly configured
-    - Sufficient GPU memory for multiple model copies
-
-    Note: Uses torch.multiprocessing with 'spawn' start method for CUDA compatibility.
-
-Usage examples:
-    # *** Main checkpoint: 98.5% success rate ***
-    #   Replace `task_suite_name` with one of {libero_spatial, libero_object, libero_goal, libero_10}
-    #   Replace `seed` with one of {195, 196, 197}
-    #   Replace `run_id_note` with a unique identifier for the run
-    uv run -m cosmos_policy.experiments.robot.libero.run_libero_eval \
-        --config cosmos_predict2_2b_480p_libero__inference_only \
-        --ckpt_path nvidia/Cosmos-Policy-LIBERO-Predict2-2B \
+Usage example:
+    uv run -m cosmos_policy.experiments.robot.libero.run_libero_eval_overfit \
+        --config cosmos_predict2_2b_480p_libero_one_demo_one_episode \
+        --ckpt_path /path/to/checkpoint \
         --config_file cosmos_policy/config/config.py \
         --use_wrist_image True \
         --use_proprio True \
         --normalize_proprio True \
         --unnormalize_actions True \
-        --dataset_stats_path nvidia/Cosmos-Policy-LIBERO-Predict2-2B/libero_dataset_statistics.json \
-        --t5_text_embeddings_path nvidia/Cosmos-Policy-LIBERO-Predict2-2B/libero_t5_embeddings.pkl \
         --trained_with_image_aug True \
         --chunk_size 16 \
         --num_open_loop_steps 16 \
-        --task_suite_name libero_10 \
         --local_log_dir cosmos_policy/experiments/robot/libero/logs/ \
-        --randomize_seed False \
-        --data_collection False \
-        --available_gpus "0,1,2,3,4,5,6,7" \
         --seed 195 \
-        --use_variance_scale False \
         --deterministic True \
-        --run_id_note chkpt45000--5stepAct--seed195--deterministic \
-        --ar_future_prediction False \
-        --ar_value_prediction False \
+        --run_id_note overfit_eval \
         --use_jpeg_compression True \
         --flip_images True \
         --num_denoising_steps_action 5 \
         --num_denoising_steps_future_state 1 \
         --num_denoising_steps_value 1
-    # Same as above, but with deterministic reset (seed=195/196/197, reset seed=0)
-    # Also gets 98.5% success rate
-    uv run -m cosmos_policy.experiments.robot.libero.run_libero_eval \
-        --config cosmos_predict2_2b_480p_libero__inference_only \
-        --ckpt_path nvidia/Cosmos-Policy-LIBERO-Predict2-2B \
-        --config_file cosmos_policy/config/config.py \
-        --use_wrist_image True \
-        --use_proprio True \
-        --normalize_proprio True \
-        --unnormalize_actions True \
-        --dataset_stats_path nvidia/Cosmos-Policy-LIBERO-Predict2-2B/libero_dataset_statistics.json \
-        --t5_text_embeddings_path nvidia/Cosmos-Policy-LIBERO-Predict2-2B/libero_t5_embeddings.pkl \
-        --trained_with_image_aug True \
-        --chunk_size 16 \
-        --num_open_loop_steps 16 \
-        --task_suite_name libero_10 \
-        --local_log_dir cosmos_policy/experiments/robot/libero/logs/ \
-        --randomize_seed False \
-        --data_collection False \
-        --available_gpus "0,1,2,3,4,5,6,7" \
-        --seed 195 \
-        --use_variance_scale False \
-        --deterministic True \
-        --run_id_note chkpt45000--5stepAct--seed195--deterministicand_deterministicResetSeed0 \
-        --ar_future_prediction False \
-        --ar_value_prediction False \
-        --use_jpeg_compression True \
-        --flip_images True \
-        --num_denoising_steps_action 5 \
-        --num_denoising_steps_future_state 1 \
-        --num_denoising_steps_value 1 \
-        --deterministic_reset True \
-        --deterministic_reset_seed 0
-
 """
 
 import json
@@ -113,7 +50,6 @@ import time
 import traceback
 from collections import deque
 from dataclasses import dataclass
-from enum import Enum
 from typing import Optional
 
 import draccus
@@ -125,6 +61,7 @@ import tqdm
 import wandb
 from libero.libero import benchmark
 
+from cosmos_policy._src.imaginaire.lazy_config import instantiate
 from cosmos_policy.experiments.robot.cosmos_utils import (
     WorkerPoolManager,
     get_action,
@@ -132,9 +69,8 @@ from cosmos_policy.experiments.robot.cosmos_utils import (
     get_model,
     get_planning_model,
     get_qvalue_prediction,
+    get_t5_embedding_from_cache,
     get_value_prediction,
-    init_t5_text_embeddings_cache,
-    load_dataset_stats,
     query_model_parallel,
 )
 from cosmos_policy.experiments.robot.libero.libero_utils import (
@@ -158,28 +94,18 @@ from cosmos_policy.utils.utils import jpeg_encode_image, set_seed_everywhere
 CURR_STATE_START_LATENT_IDX, CURR_STATE_END_LATENT_IDX = 1, 3
 FUTURE_STATE_START_LATENT_IDX, FUTURE_STATE_END_LATENT_IDX = 5, 7
 
-
-# Define task suite constants
-class TaskSuite(str, Enum):
-    LIBERO_SPATIAL = "libero_spatial"
-    LIBERO_OBJECT = "libero_object"
-    LIBERO_GOAL = "libero_goal"
-    LIBERO_10 = "libero_10"
-    LIBERO_90 = "libero_90"
-
-
-# Define max steps for each task suite
+# Define max steps for each task suite (same as regular eval)
 TASK_MAX_STEPS = {
-    TaskSuite.LIBERO_SPATIAL: 220,  # longest training demo has 193 steps
-    TaskSuite.LIBERO_OBJECT: 280,  # longest training demo has 254 steps
-    TaskSuite.LIBERO_GOAL: 300,  # longest training demo has 270 steps
-    TaskSuite.LIBERO_10: 520,  # longest training demo has 505 steps
-    TaskSuite.LIBERO_90: 400,  # longest training demo has 373 steps
+    "libero_spatial": 220,
+    "libero_object": 280,
+    "libero_goal": 300,
+    "libero_10": 520,
+    "libero_90": 400,
 }
 
 
 @dataclass
-class PolicyEvalConfig:
+class PolicyEvalOverfitConfig:
     # fmt: off
     suite: str = "libero"                                                # Evaluation suite name
 
@@ -187,7 +113,7 @@ class PolicyEvalConfig:
     # Cosmos Policy-specific parameters
     #################################################################################################################
     model_family: str = "cosmos"                                         # Model family
-    config: str = ""                                                     # Inference config name
+    config: str = ""                                                     # Training config name (should match the checkpoint)
     ckpt_path: str = ""                                                  # Pretrained checkpoint path
     planning_model_config_name: str = ""                                 # Planning model config name
     planning_model_ckpt_path: str = ""                                   # Planning model checkpoint path
@@ -209,8 +135,6 @@ class PolicyEvalConfig:
     num_denoising_steps_value: int = 1                                   # Number of denoising steps to take for value prediction (only applicable if ar_value_prediction is True; otherwise equal to num_denoising_steps_action)
     unnormalize_actions: bool = True                                     # Unnormalize actions if trained with normalized actions
     normalize_proprio: bool = True                                       # Normalize proprio input if trained with normalized proprio
-    dataset_stats_path: str = ""                                         # Path to dataset statistics file for action unnormalization and proprio normalization
-    t5_text_embeddings_path: str = ""                                    # Path to precomputed T5 text embeddings dictionary (key: instruction, val: embedding)
     trained_with_image_aug: bool = True                                  # Whether the model was trained with image augmentations (needed for test-time image transformations)
     chunk_size: int = 16                                                 # Number of actions to predict in chunk
     num_open_loop_steps: int = 16                                        # Number of actions in predicted chunk to execute open-loop before requerying policy
@@ -238,11 +162,9 @@ class PolicyEvalConfig:
     parallel_timeout: int = 15                                           # Timeout in seconds for each parallel query
 
     #################################################################################################################
-    # LIBERO environment-specific parameters
+    # Overfitting evaluation parameters
     #################################################################################################################
-    task_suite_name: str = TaskSuite.LIBERO_SPATIAL                      # Task suite (must be one of: LIBERO_SPATIAL, LIBERO_OBJECT, LIBERO_GOAL, LIBERO_10, LIBERO_90)
-    num_trials_per_task: int = 50                                        # Number of rollouts per task
-    initial_states_path: str = "DEFAULT"                                 # "DEFAULT", or path to initial states JSON file
+    num_trials_per_episode: int = 1                                      # Number of rollouts per training episode
     env_img_res: int = 256                                               # Resolution for rendering environment images (not policy input resolution)
 
     #################################################################################################################
@@ -276,49 +198,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def validate_config(cfg: PolicyEvalConfig) -> None:
+def validate_config(cfg: PolicyEvalOverfitConfig) -> None:
     """Validate configuration parameters."""
     assert cfg.ckpt_path is not None, "ckpt_path must not be None!"
+    assert cfg.config is not None, "config must not be None!"
 
     if "image_aug" in str(cfg.ckpt_path):
         assert cfg.trained_with_image_aug, (
             "Expecting `trained_with_image_aug==True` because model was trained with image augmentations!"
         )
 
-    # Validate task suite
-    assert cfg.task_suite_name in [suite.value for suite in TaskSuite], f"Invalid task suite: {cfg.task_suite_name}"
 
-
-def check_unnorm_key(cfg: PolicyEvalConfig, model) -> None:
-    """Check that the model contains the action un-normalization key."""
-    # Initialize unnorm_key
-    unnorm_key = cfg.task_suite_name
-
-    # In some cases, the key must be manually modified (e.g. after training on a modified version of the dataset
-    # with the suffix "_no_noops" in the dataset name)
-    if unnorm_key not in model.norm_stats and f"{unnorm_key}_no_noops" in model.norm_stats:
-        unnorm_key = f"{unnorm_key}_no_noops"
-
-    assert unnorm_key in model.norm_stats, f"Action un-norm key {unnorm_key} not found in Cosmos Policy `norm_stats`!"
-
-    # Set the unnorm_key in cfg
-    cfg.unnorm_key = unnorm_key
-
-
-def load_initial_states(cfg: PolicyEvalConfig, task_suite, task_id: int, log_file=None):
-    """Load initial states for the given task."""
-    # Get default initial states
-    initial_states = task_suite.get_task_init_states(task_id)
-
-    # If using custom initial states, load them from file
-    if cfg.initial_states_path != "DEFAULT":
-        with open(cfg.initial_states_path, "r") as f:
-            all_initial_states = json.load(f)
-        log_message(f"Using initial states from {cfg.initial_states_path}", log_file)
-        return initial_states, all_initial_states
+def get_task_suite_from_dataset_suite(dataset_suite: str) -> str:
+    """Map dataset suite name to LIBERO task suite name."""
+    # Dataset suite names might have suffixes like "_no_noops_rerendered"
+    # Extract the base suite name
+    if "libero_spatial" in dataset_suite:
+        return "libero_spatial"
+    elif "libero_object" in dataset_suite:
+        return "libero_object"
+    elif "libero_goal" in dataset_suite:
+        return "libero_goal"
+    elif "libero_10" in dataset_suite or "libero_long" in dataset_suite:
+        return "libero_10"
+    elif "libero_90" in dataset_suite:
+        return "libero_90"
     else:
-        log_message("Using default initial states", log_file)
-        return initial_states, None
+        # Default to libero_spatial if we can't determine
+        return "libero_spatial"
 
 
 def prepare_observation(obs, resize_size, flip_images: bool = False):
@@ -337,8 +244,16 @@ def prepare_observation(obs, resize_size, flip_images: bool = False):
     return observation  # Return processed observation
 
 
+def get_initial_state_from_episode_data(episode_data, env):
+    """Extract initial state from episode data by setting environment to first observation."""
+    # For overfitting evaluation, we'll use the default initial state from the environment
+    # The training data's initial state might not be easily reproducible
+    # Return None to use default initial state (environment will be reset in run_episode)
+    return None
+
+
 def run_episode(
-    cfg: PolicyEvalConfig,
+    cfg: PolicyEvalOverfitConfig,
     env,
     task_description: str,
     model,
@@ -354,13 +269,21 @@ def run_episode(
     if cfg.deterministic_reset:
         reset_seed = cfg.deterministic_reset_seed if cfg.deterministic_reset_seed is not None else cfg.seed
         set_seed_everywhere(reset_seed)
-    env.reset()
+    
+    # Reset environment - reset() may return the observation directly
+    reset_result = env.reset()
+    if isinstance(reset_result, dict):
+        obs = reset_result
+    elif reset_result is not None:
+        # If reset() returns something but not a dict, it might be the observation
+        obs = reset_result
+    else:
+        # If reset() returns None, take a dummy step to get observation
+        obs, _, _, _ = env.step(get_libero_dummy_action(cfg.model_family))
 
     # Set initial state if provided
     if initial_state is not None:
         obs = env.set_init_state(initial_state)
-    else:
-        obs = env.get_observation()
 
     # Initialize action queue
     if cfg.num_open_loop_steps != cfg.chunk_size:
@@ -376,7 +299,8 @@ def run_episode(
     replay_images = []
     replay_wrist_images = [] if cfg.use_wrist_image else None
     future_image_predictions_list = []
-    max_steps = TASK_MAX_STEPS[cfg.task_suite_name]
+    # Use a default max_steps (will be determined from task suite if available)
+    max_steps = 520  # Default to libero_10 max steps
 
     # Best-of-N search variables
     base_seed = cfg.seed  # Used for seed switching (if applicable)
@@ -646,10 +570,10 @@ def run_episode(
     return success, replay_images, replay_wrist_images, future_image_predictions_list, collected_data
 
 
-def run_task(
-    cfg: PolicyEvalConfig,
-    task_suite,
-    task_id: int,
+def run_training_episode_eval(
+    cfg: PolicyEvalOverfitConfig,
+    episode_idx: int,
+    episode_data: dict,
     model,
     planning_model,
     dataset_stats,
@@ -659,39 +583,39 @@ def run_task(
     total_successes=0,
     log_file=None,
 ):
-    """Run evaluation for a single task."""
-    # Get task
-    task = task_suite.get_task(task_id)
+    """Run evaluation for a single training episode."""
+    # Extract episode information
+    task_description = episode_data["command"]
+    dataset_suite = episode_data.get("suite", "libero_spatial")
+    task_suite_name = get_task_suite_from_dataset_suite(dataset_suite)
+    
+    # Get max steps for this task suite
+    max_steps = TASK_MAX_STEPS.get(task_suite_name, 520)
 
-    # Get initial states
-    initial_states, all_initial_states = load_initial_states(cfg, task_suite, task_id, log_file)
+    log_message(f"\nTraining Episode {episode_idx}: {task_description}", log_file)
+    log_message(f"Dataset suite: {dataset_suite}, Task suite: {task_suite_name}", log_file)
 
-    # Initialize environment and get task description
-    env, task_description = get_libero_env(task, cfg.model_family, resolution=cfg.env_img_res)
+    # Initialize LIBERO environment
+    # We need to find a task from the benchmark that matches the task description
+    # For now, we'll use the first task from the appropriate suite
+    benchmark_dict = benchmark.get_benchmark_dict()
+    task_suite = benchmark_dict[task_suite_name]()
+    
+    # Use the first task from the suite (we'll match by description if possible)
+    # For simplicity, use task 0
+    task = task_suite.get_task(0)
+    env, _ = get_libero_env(task, cfg.model_family, resolution=cfg.env_img_res)
+    
+    # Override task description with the one from training data
+    task_description = episode_data["command"]
 
     # Start episodes
-    task_episodes, task_successes = 0, 0
-    for episode_idx in tqdm.tqdm(range(cfg.num_trials_per_task)):
-        log_message(f"\nTask: {task_description}", log_file)
+    episode_successes = 0
+    for trial_idx in tqdm.tqdm(range(cfg.num_trials_per_episode)):
+        log_message(f"Starting trial {trial_idx + 1}/{cfg.num_trials_per_episode} for episode {episode_idx}...", log_file)
 
-        # Handle initial state
-        if cfg.initial_states_path == "DEFAULT":
-            # Use default initial state
-            initial_state = initial_states[episode_idx]
-        else:
-            # Get keys for fetching initial episode state from JSON
-            initial_states_task_key = task_description.replace(" ", "_")
-            episode_key = f"demo_{episode_idx}"
-
-            # Skip episode if expert demonstration failed to complete the task
-            if not all_initial_states[initial_states_task_key][episode_key]["success"]:
-                log_message(f"Skipping task {task_id} episode {episode_idx} due to failed expert demo!", log_file)
-                continue
-
-            # Get initial state
-            initial_state = np.array(all_initial_states[initial_states_task_key][episode_key]["initial_state"])
-
-        log_message(f"Starting episode {task_episodes + 1}...", log_file)
+        # Get initial state (for now, use None to use default reset)
+        initial_state = get_initial_state_from_episode_data(episode_data, env)
 
         # Run episode
         success, replay_images, replay_wrist_images, future_image_predictions_list, collected_data = run_episode(
@@ -708,10 +632,9 @@ def run_task(
         )
 
         # Update counters
-        task_episodes += 1
         total_episodes += 1
         if success:
-            task_successes += 1
+            episode_successes += 1
             total_successes += 1
 
         # Save replay video
@@ -749,7 +672,7 @@ def run_task(
 
             def _save_episode_data():
                 """Save collected episode data to HDF5 file."""
-                ep_filename = f"episode_data--suite={cfg.task_suite_name}--{DATE_TIME}--task={task_id}--ep={total_episodes}--success={success}--{cfg.run_id_note}.hdf5"
+                ep_filename = f"episode_data--overfit--{DATE_TIME}--ep={episode_idx}--trial={trial_idx}--total_ep={total_episodes}--success={success}--{cfg.run_id_note}.hdf5"
                 rollout_data_dir = os.path.join(cfg.local_log_dir, "rollout_data")
                 os.makedirs(rollout_data_dir, exist_ok=True)
                 ep_filepath = os.path.join(rollout_data_dir, ep_filename)
@@ -766,6 +689,7 @@ def run_task(
                         else:
                             f.attrs[k] = v
                     f.attrs["task_description"] = task_description
+                    f.attrs["training_episode_idx"] = episode_idx
 
             _save_episode_data()
 
@@ -774,19 +698,19 @@ def run_task(
         log_message(f"# episodes completed so far: {total_episodes}", log_file)
         log_message(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)", log_file)
 
-    # Log task results
-    task_success_rate = float(task_successes) / float(task_episodes) if task_episodes > 0 else 0
+    # Log episode results
+    episode_success_rate = float(episode_successes) / float(cfg.num_trials_per_episode) if cfg.num_trials_per_episode > 0 else 0
     total_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0
-    log_message(f"Current task success rate: {task_success_rate}", log_file)
+    log_message(f"Episode {episode_idx} success rate: {episode_success_rate}", log_file)
     log_message(f"Current total success rate: {total_success_rate}", log_file)
 
     # Log to wandb if enabled
     if cfg.use_wandb:
         wandb.log(
             {
-                f"success_rate/{cfg.task_suite_name}/{task_description}": task_success_rate,
-                f"num_episodes/{cfg.task_suite_name}/{task_description}": task_episodes,
-                f"num_successes/{cfg.task_suite_name}/{task_description}": task_successes,
+                f"success_rate/overfit/episode_{episode_idx}": episode_success_rate,
+                f"num_episodes/overfit/episode_{episode_idx}": cfg.num_trials_per_episode,
+                f"num_successes/overfit/episode_{episode_idx}": episode_successes,
             },
         )
 
@@ -797,8 +721,8 @@ def run_task(
 
 
 @draccus.wrap()
-def eval_libero(cfg: PolicyEvalConfig) -> float:
-    """Main function to evaluate a trained policy on LIBERO benchmark tasks."""
+def eval_libero_overfit(cfg: PolicyEvalOverfitConfig):
+    """Main function to evaluate a trained policy on training dataset episodes (overfitting evaluation)."""
 
     # Set DETERMINISTIC environment variable if on deterministic mode (makes some model operations deterministic)
     assert not (cfg.deterministic and cfg.randomize_seed), (
@@ -817,11 +741,42 @@ def eval_libero(cfg: PolicyEvalConfig) -> float:
     # Set random seed
     set_seed_everywhere(cfg.seed)
 
-    # Initialize T5 text embeddings cache
-    init_t5_text_embeddings_cache(cfg.t5_text_embeddings_path)
+    # Load model and config
+    model, cosmos_config = get_model(cfg)
+    
+    # Extract dataset from config
+    log_message("Instantiating dataset from config...", None)
+    dataset = instantiate(cosmos_config.dataloader_train.dataset)
+    
+    # Extract dataset statistics and T5 embeddings from dataset
+    dataset_stats = dataset.dataset_stats
+    t5_text_embeddings = getattr(dataset, 't5_text_embeddings', None)
+    
+    log_message(f"Dataset loaded: {dataset.num_episodes} episodes, {dataset.num_steps} steps", None)
+    log_message(f"Dataset statistics keys: {list(dataset_stats.keys())}", None)
+    if t5_text_embeddings is not None:
+        log_message(f"T5 embeddings loaded: {len(t5_text_embeddings)} embeddings", None)
+    else:
+        log_message("Warning: T5 embeddings not found in dataset", None)
 
-    # Load Cosmos Policy dataset stats
-    dataset_stats = load_dataset_stats(cfg.dataset_stats_path)
+    # Initialize T5 text embeddings cache from dataset
+    # The T5 embeddings are already loaded in the dataset, but we need to initialize the cache
+    # for the evaluation functions to use them
+    if t5_text_embeddings is not None:
+        from cosmos_policy.experiments.robot.cosmos_utils import t5_text_embeddings_cache, DEVICE
+        # Move embeddings to the appropriate device if they're tensors
+        device = DEVICE
+        for key, value in t5_text_embeddings.items():
+            if isinstance(value, torch.Tensor):
+                t5_text_embeddings_cache[key] = value.to(device)
+            else:
+                t5_text_embeddings_cache[key] = value
+        log_message(f"T5 embeddings cache initialized from dataset ({len(t5_text_embeddings_cache)} embeddings)", None)
+
+    # Verify chunk size matches
+    assert cfg.chunk_size == dataset.chunk_size, (
+        f"Mismatch found between train and test chunk sizes! Train: {dataset.chunk_size}, Test: {cfg.chunk_size}"
+    )
 
     # If using parallel inference, initialize worker pool
     worker_pool = None
@@ -831,13 +786,7 @@ def eval_libero(cfg: PolicyEvalConfig) -> float:
         worker_pool = WorkerPoolManager(cfg, dataset_stats, available_gpus)
         model = None
         planning_model = None
-
-    # If using serial inference, initialize model and Cosmos config
     else:
-        model, cosmos_config = get_model(cfg)
-        assert cfg.chunk_size == cosmos_config.dataloader_train.dataset.chunk_size, (
-            f"Mismatch found between train and test chunk sizes! Train: {cosmos_config.dataloader_train.dataset.chunk_size}, Test: {cfg.chunk_size}"
-        )
         worker_pool = None
 
         # Initialize model for world model and value function
@@ -852,7 +801,7 @@ def eval_libero(cfg: PolicyEvalConfig) -> float:
     # Setup logging
     log_file, local_log_filepath, run_id = setup_logging(
         cfg=cfg,
-        task_identifier=cfg.task_suite_name,
+        task_identifier="overfit",
         log_dir=cfg.local_log_dir,
         run_id_note=cfg.run_id_note,
         use_wandb=cfg.use_wandb,
@@ -860,9 +809,12 @@ def eval_libero(cfg: PolicyEvalConfig) -> float:
         wandb_project=cfg.wandb_project,
     )
     log_message(f"Eval config: {cfg}", log_file)
+    log_message(f"Evaluating on {dataset.num_episodes} training episodes", log_file)
 
     # Log parallel inference configuration and start worker pool
     if cfg.use_parallel_inference and worker_pool:
+        available_gpus = [int(gpu.strip()) for gpu in cfg.available_gpus.split(",")]
+        available_gpus = available_gpus[: cfg.num_queries_best_of_n]
         log_message(f"Parallel inference enabled on GPUs: {available_gpus}", log_file)
         log_message(f"Parallel timeout: {cfg.parallel_timeout}s", log_file)
         log_message(f"Multiprocessing start method: {mp.get_start_method()}", log_file)
@@ -888,25 +840,17 @@ def eval_libero(cfg: PolicyEvalConfig) -> float:
     else:
         log_message("Using serial inference (parallel inference disabled)", log_file)
 
-    # Initialize LIBERO task suite
-    benchmark_dict = benchmark.get_benchmark_dict()
-    task_suite = benchmark_dict[cfg.task_suite_name]()
-    num_tasks = task_suite.n_tasks
-
-    log_message(f"Task suite: {cfg.task_suite_name}", log_file)
-    log_message(f"Number of tasks: {num_tasks}", log_file)
-
-    # Start evaluation
+    # Start evaluation on training episodes
     total_episodes, total_successes = 0, 0
-    # for task_id in tqdm.tqdm(range(num_tasks)):
-    for task_id in tqdm.tqdm(range(1)):
+    for episode_idx in tqdm.tqdm(range(dataset.num_episodes)):
+        episode_data = dataset.data[episode_idx]
         (
             total_episodes,
             total_successes,
-        ) = run_task(
+        ) = run_training_episode_eval(
             cfg,
-            task_suite,
-            task_id,
+            episode_idx,
+            episode_data,
             model,
             planning_model,
             dataset_stats,
@@ -925,13 +869,14 @@ def eval_libero(cfg: PolicyEvalConfig) -> float:
     log_message(f"Total episodes: {total_episodes}", log_file)
     log_message(f"Total successes: {total_successes}", log_file)
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
+    
     # Log to wandb if enabled
     if cfg.use_wandb:
         wandb.log(
             {
-                f"success_rate/{cfg.task_suite_name}/total": final_success_rate,
-                f"num_episodes/{cfg.task_suite_name}/total": total_episodes,
-                f"num_successes/{cfg.task_suite_name}/total": total_successes,
+                f"success_rate/overfit/total": final_success_rate,
+                f"num_episodes/overfit/total": total_episodes,
+                f"num_successes/overfit/total": total_successes,
             },
         )
         wandb.save(local_log_filepath)
@@ -953,4 +898,4 @@ def eval_libero(cfg: PolicyEvalConfig) -> float:
 
 
 if __name__ == "__main__":
-    eval_libero()
+    eval_libero_overfit()

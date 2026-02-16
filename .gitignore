@@ -9,3 +9,5 @@ rollouts/*
 tmp/*
 logs/*
 **/logs/*
+sbatch_logs/*
+visualizations/*
