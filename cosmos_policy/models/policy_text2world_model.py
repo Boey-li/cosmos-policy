@@ -263,15 +263,15 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             data_batch["t5_text_mask"] = torch.ones(text_embeddings.shape[0], text_embeddings.shape[1], device="cuda")
 
         # Get the input data to noise and denoise~(image, video) and the corresponding conditioner.
+        # x0_B_C_T_H_W: [1, 16, 11, 28, 28]
         _, x0_B_C_T_H_W, condition = self.get_data_and_condition(data_batch)
 
         # Sample pertubation noise levels and N(0, 1) noises
+        # sigma_B_T: [1, 1]
         sigma_B_T, epsilon_B_C_T_H_W = self.draw_training_sigma_and_epsilon(x0_B_C_T_H_W.size(), condition)
-
         # Broadcast and split the input data and condition for model parallelism
-        x0_B_C_T_H_W, condition, epsilon_B_C_T_H_W, sigma_B_T = self.broadcast_split_for_model_parallelsim(
-            x0_B_C_T_H_W, condition, epsilon_B_C_T_H_W, sigma_B_T
-        )
+        # sigma_B_T: [1, 1]
+        x0_B_C_T_H_W, condition, epsilon_B_C_T_H_W, sigma_B_T = self.broadcast_split_for_model_parallelsim(x0_B_C_T_H_W, condition, epsilon_B_C_T_H_W, sigma_B_T)
         output_batch, kendall_loss, _, _ = self.compute_loss_with_epsilon_and_sigma(
             x0_B_C_T_H_W,
             condition,

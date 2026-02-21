@@ -40,7 +40,7 @@ class MinimalV1LVGDiT(MiniTrainDIT):
         intermediate_feature_ids: Optional[List[int]] = None,
         img_context_emb: Optional[torch.Tensor] = None,
         **kwargs,
-    ) -> torch.Tensor | List[torch.Tensor] | Tuple[torch.Tensor, List[torch.Tensor]]:
+    ) -> torch.Tensor | List[torch.Tensor] | Tuple[torch.Tensor, List[torch.Tensor]]:    
         del kwargs
 
         if data_type == DataType.VIDEO:

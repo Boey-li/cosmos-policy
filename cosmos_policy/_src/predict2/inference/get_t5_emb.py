@@ -41,8 +41,10 @@ class CosmosT5TextEncoder(torch.nn.Module):
         self.tokenizer = T5TokenizerFast.from_pretrained(
             model_name, cache_dir=cache_dir, local_files_only=local_files_only
         )
+        # Use safetensors to avoid torch version requirement (torch >= 2.6)
+        # This allows compatibility with torch 2.5.x
         self.text_encoder = T5EncoderModel.from_pretrained(
-            model_name, cache_dir=cache_dir, local_files_only=local_files_only
+            model_name, cache_dir=cache_dir, local_files_only=local_files_only, use_safetensors=True
         ).to(device)
         self.text_encoder.eval()
         self.device = device

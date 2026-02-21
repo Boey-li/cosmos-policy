@@ -104,7 +104,7 @@ def get_video_num_frames(video_path):
     return frame_count
 
 
-def get_history_indices(curr_step_index: int, num_history_indices: int, spacing_factor: int) -> tuple:
+def get_history_indices(curr_step_index: int, num_history_indices: int, spacing_factor: int):
     """
     Computes the step indices corresponding to the history, given the current step index.
 
@@ -179,7 +179,7 @@ class ALOHADataset(Dataset):
             use_image_aug (bool): Whether to apply image augmentations
             use_stronger_image_aug (bool): Whether to apply stronger image augmentations
             debug (bool): If True, loads only the first episode and returns only the first sample in that episode
-            debug2 (bool): If True, loads all episodes but returns only one specific sample in the whole dataset
+            debug2 (bool): If True, loa ds all episodes but returns only one specific sample in the whole dataset
             use_proprio (bool): If True, adds proprio to image observations
             num_history_indices (int): Number of frames to include in history
             history_spacing_factor (int): Spacing amount between frames in history
@@ -1020,7 +1020,7 @@ class ALOHADataset(Dataset):
                 assert 0 <= val < num_segments, f"{name}={val} out of range for num_segments={num_segments}"
 
         # Concatenate unique frames and preprocess once
-        all_unique_images = np.stack(frames, axis=0)
+        all_unique_images = np.stack(frames, axis=0) # (num_segments, H, W, C)
         all_unique_images = preprocess_image(
             all_unique_images,
             final_image_size=self.final_image_size,
@@ -1031,7 +1031,7 @@ class ALOHADataset(Dataset):
         t_prev = time.time()
         # Expand unique preprocessed images by repeat counts along time dimension
         lengths = torch.as_tensor(repeats, dtype=torch.long, device=all_unique_images.device)
-        all_images = torch.repeat_interleave(all_unique_images, lengths, dim=1)
+        all_images = torch.repeat_interleave(all_unique_images, lengths, dim=1) # (n_segments, T_expanded, C, H, W)
         # Sanity: expanded length matches repeats sum
         assert all_images.shape[1] == int(lengths.sum().item()), "Expanded T does not match repeats sum"
         t_prev = time.time()
@@ -1042,7 +1042,7 @@ class ALOHADataset(Dataset):
             relative_step_idx=relative_step_idx,
             chunk_size=self.chunk_size,
             num_steps=episode_data["num_steps"],
-        )
+        ) # (chunk_size, action_dim)
 
         t_prev = time.time()
 

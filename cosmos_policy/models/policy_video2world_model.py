@@ -54,7 +54,6 @@ class CosmosPolicyVideo2WorldConfig(CosmosPolicyModelConfig):
     Inherits from CosmosPolicyModelConfig and adds some video-specific parameters in the same way that
     Video2WorldConfig adds video-specific parameters to Text2WorldModelConfig.
     """
-
     min_num_conditional_frames: int = 1  # Minimum number of latent conditional frames
     max_num_conditional_frames: int = 2  # Maximum number of latent conditional frames
     sigma_conditional: float = 0.0001  # Noise level used for conditional frames
@@ -418,15 +417,16 @@ class CosmosPolicyVideo2WorldModel(CosmosPolicyDiffusionModel):
                 # When using random dropout, we zero out the ground truth frames
                 condition_state_in_B_C_T_H_W = condition_state_in_B_C_T_H_W * 0
 
-            _, C, _, _, _ = xt_B_C_T_H_W.shape
+            _, C, _, _, _ = xt_B_C_T_H_W.shape # [1, 16, 11, 28, 28]
             condition_video_mask = condition.condition_video_input_mask_B_C_T_H_W.repeat(1, C, 1, 1, 1).type_as(
                 net_state_in_B_C_T_H_W
-            )
+            ) # [1, 16, 11, 28, 28]
 
             # Replace the first few frames of the video with the conditional frames
             # Update the c_noise as the conditional frames are clean and have very low noise
 
             # Make the first few frames of x_t be the ground truth frames
+            # net_state_in_B_C_T_H_W: [1, 16, 11, 28, 28]
             net_state_in_B_C_T_H_W = condition_state_in_B_C_T_H_W * condition_video_mask + net_state_in_B_C_T_H_W * (
                 1 - condition_video_mask
             )
@@ -436,7 +436,7 @@ class CosmosPolicyVideo2WorldModel(CosmosPolicyDiffusionModel):
             condition_video_mask_B_1_T_1_1 = condition_video_mask.mean(dim=[1, 3, 4], keepdim=True)
             c_noise_B_1_T_1_1 = c_noise_cond_B_1_T_1_1 * condition_video_mask_B_1_T_1_1 + c_noise_B_1_T_1_1 * (
                 1 - condition_video_mask_B_1_T_1_1
-            )
+            ) # [B, 1, state_t, 1, 1]
 
         # forward pass through the network
         net_output_B_C_T_H_W = self.net(

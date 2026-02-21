@@ -791,11 +791,23 @@ class DiffusionModel(ImaginaireModel):
 
     # ------------------ Checkpointing ------------------
 
-    def state_dict(self) -> Dict[str, Any]:
-        net_state_dict = self.net.state_dict(prefix="net.")
+    def state_dict(
+        self,
+        destination: Optional[Dict[str, Any]] = None,
+        prefix: str = "",
+        keep_vars: bool = False,
+    ) -> Dict[str, Any]:
+        """State dict compatible with nn.Module.state_dict() for PyTorch Lightning checkpointing."""
+        net_state_dict = self.net.state_dict(prefix="net.", keep_vars=keep_vars)
         if self.config.ema.enabled:
-            ema_state_dict = self.net_ema.state_dict(prefix="net_ema.")
+            ema_state_dict = self.net_ema.state_dict(prefix="net_ema.", keep_vars=keep_vars)
             net_state_dict.update(ema_state_dict)
+        if destination is not None:
+            for k, v in net_state_dict.items():
+                destination[prefix + k] = v
+            return destination
+        if prefix:
+            return collections.OrderedDict((prefix + k, v) for k, v in net_state_dict.items())
         return net_state_dict
 
     def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False):
@@ -897,7 +909,6 @@ class DiffusionModel(ImaginaireModel):
         sigma_B_1_T_1_1 = rearrange(sigma_B_T, "b t -> b 1 t 1 1")
         # get precondition for the network
         c_skip_B_1_T_1_1, c_out_B_1_T_1_1, c_in_B_1_T_1_1, c_noise_B_1_T_1_1 = self.scaling(sigma=sigma_B_1_T_1_1)
-
         # forward pass through the network
         net_output_B_C_T_H_W = self.net(
             x_B_C_T_H_W=(xt_B_C_T_H_W * c_in_B_1_T_1_1).to(

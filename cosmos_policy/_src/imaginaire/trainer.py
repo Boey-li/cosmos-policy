@@ -151,7 +151,7 @@ class ImaginaireTrainer:
         model: ImaginaireModel,
         dataloader_train: torch.utils.data.DataLoader,
         dataloader_val: torch.utils.data.DataLoader,
-    ) -> None:
+    ):
         """The training function.
 
         Args:

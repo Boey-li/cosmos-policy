@@ -5,6 +5,7 @@
 .vscode
 .cursor
 LIBERO-Cosmos-Policy
+ALOHA-Cosmos-Policy
 rollouts/*
 tmp/*
 logs/*

@@ -821,6 +821,8 @@ class WanModel(WeightTrainingStat):
             Tensor:
                 Denoised video tensor with shape [B, C_out, T, H / 8, W / 8]
         """
+        # timesteps_B_T: (B, 11)?
+        import pdb; pdb.set_trace()        
         assert timesteps_B_T.shape[1] == 1
         t_B = timesteps_B_T[:, 0]
         del kwargs
