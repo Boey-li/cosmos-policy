@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=cosmos_libero_train
-#SBATCH --output=sbatch_logs/cosmos_libero_train.out
-#SBATCH --error=sbatch_logs/cosmos_libero_train.err
+#SBATCH --job-name=cosmos_egoverse_train
+#SBATCH --output=sbatch_logs/cosmos_egoverse_train.out
+#SBATCH --error=sbatch_logs/cosmos_egoverse_train.err
 #SBATCH --partition="rl2-lab"
 #SBATCH --account="rl2-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node="l40s:1"
 #SBATCH --qos="short"
 #SBATCH --exclude="bishop"
@@ -18,8 +18,7 @@ echo "Node: $SLURM_NODELIST"
 echo "Start Time: $(date)"
 echo "Working Directory: $(pwd)"
 
-
-# Set BASE_DATASETS_DIR to the directory containing the LIBERO-Cosmos-Policy dataset
+# Set BASE_DATASETS_DIR to the directory containing the EgoVerse dataset
 export BASE_DATASETS_DIR="/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy"
 
 # Use local filesystem for TMPDIR to avoid NFS cleanup issues
@@ -48,10 +47,9 @@ source /coc/flash7/bli678/Projects/EgoVerse/emimic/bin/activate
 
 # Run training
 echo "Starting training..."
-torchrun --nproc_per_node=1 --master_port=12341 -m cosmos_policy.scripts.train \
+torchrun --nproc_per_node=1 -m cosmos_policy.scripts.train \
   --config=cosmos_policy/config/config.py -- \
-  experiment="cosmos_predict2_2b_480p_libero_one_demo_one_episode" \
-  trainer.grad_accum_iter=1
+  experiment="cosmos_predict2_2b_480p_egoverse"
 
 # Cleanup
 echo "Training completed at: $(date +%Y-%m-%d_%H-%M-%S)"

@@ -89,8 +89,8 @@ cosmos_predict2_2b_480p_libero = LazyDict(
                 ),
             ),
             run_validation=False,
-            logging_iter=5,
-            max_iter=1000000,
+            logging_iter=10,
+            max_iter=50000,
             straggler_detection=dict(
                 enabled=False,
             ),
@@ -244,8 +244,8 @@ cosmos_predict2_2b_480p_libero_one_demo_one_episode = LazyDict(
                 ),
             ),
             run_validation=False,
-            logging_iter=5,
-            max_iter=10,  # Reduced for testing with limited data
+            logging_iter=100,
+            max_iter=50000,  # Reduced for testing with limited data
             straggler_detection=dict(
                 enabled=False,
             ),
@@ -304,7 +304,7 @@ cosmos_predict2_2b_480p_libero_one_demo_one_episode = LazyDict(
             load_path=get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
             load_training_state=False,  # This means do not load train state from the base checkpoint above (load_path); but when resuming this job, will load train state
             strict_resume=False,
-            save_iter=100,
+            save_iter=10000,
             load_ema_to_reg=True,
             load_from_object_store=dict(
                 enabled=False,
@@ -598,20 +598,48 @@ cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbow
 
 
 # *** EgoVerse Dataset Config ***
+# Mirrors egomimic/hydra_configs/data/debug.yaml:
+#   demo    block → filters,         is_rollout=False  (rollout_data_mask=0)
+#   rollout block → rollout_filters, is_rollout=True   (rollout_data_mask=1)
+#
+# Video sequence (use_proprio=True, use_values=False, num_duplicates_per_image=4):
+#   slot 0: blank (1)
+#   slot 1: curr proprio (4)
+#   slot 2: curr left wrist (4)
+#   slot 3: curr right wrist (4)
+#   slot 4: curr primary (4)
+#   slot 5: action blank (4)
+#   slot 6: future proprio (4)
+#   slot 7: future left wrist (4)
+#   slot 8: future right wrist (4)
+#   slot 9: future primary (4)
+#   [no value slot when use_values=False – mirrors egomimic exactly]
+#   Total frames: 1 + 9×4 = 37  →  chunk_duration=37, state_t=10
 egoverse_cosmos_policy = L(EgoVerseDataset)(
-    embodiment="eva_bimanual",  # Change to your embodiment: aria_bimanual, eva_bimanual, etc.
-    mode="train",
-    temp_root="/coc/cedarp-dxu345-0/mlin365/egoverse/",
-    cache_root="/coc/flash7/mlin365/hf_cache",
-    filters={"lab": "rl2", "task":"cup_on_saucer"},  # Add your filters: {"lab": "rl2", "task": "put_cup_on_saucer"}
+    embodiment="eva_bimanual",
+    mode="total",
+    temp_root="/coc/flash7/scratch/egowm/wmprocessedDataset/",
+    cache_root="/coc/flash7/scratch/egowm/.cache",
+    # ── demo block (is_rollout=False) ─────────────────────────────────────────
+    filters={"episode_hash": "2026-01-22-18-57-54-150000"},
+    # ── rollout block (is_rollout=True) – set to None for demo-only training ──
+    # Uncomment and point at your rollout data to enable WM + VF training:
+    # rollout_filters={"episode_hash": "YOUR_ROLLOUT_EPISODE_HASH"},
+    rollout_filters={"episode_hash": "2026-01-22-18-57-54-150000"},
+    rollout_success=True,            # success=true in debug.yaml
+    p_world_model=0.5,               # p_world_model=0.5 in debug.yaml
+    demonstration_sampling_prob=1.0, # 1.0 = demo-only; set 0.5 for 50/50 mix
+    # ── shared params ─────────────────────────────────────────────────────────
     t5_text_embeddings_path="/coc/flash7/scratch/egowm/wmprocessedDataset/t5_embeddings.pkl",
-    chunk_size=50,  # Adjust based on your task horizon
+    chunk_size=25,                   # matches egomimic action_chunk=25
+    use_future=True,                 # request future.* keys from S3RLDBDataset
     use_image_aug=True,
     use_stronger_image_aug=True,
     use_proprio=True,
+    use_values=True,
     normalize_proprio=True,
     normalize_actions=True,
-    num_duplicates_per_image=4,  # WAN 2.1 tokenizer: 4 images per latent frame
+    num_duplicates_per_image=4,      # WAN 2.1 tokenizer
     primary_camera_key="observations.images.front_img_1",
     left_wrist_camera_key="observations.images.left_wrist_img",
     right_wrist_camera_key="observations.images.right_wrist_img",
@@ -625,6 +653,23 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
             "/experiment/cosmos_predict2_2b_480p_libero",
             "_self_",
         ],
+        trainer=dict(
+            callbacks=dict(
+                every_n_sample_reg=dict(
+                    every_n=100000,
+                    save_s3=False,
+                    use_negative_prompt=False,
+                    guidance=[0],
+                    num_sampling_step=9,
+                ),
+            ),
+            run_validation=False,
+            logging_iter=1,
+            max_iter=5,
+            straggler_detection=dict(
+                enabled=False,
+            ),
+        ),
         scheduler=dict(
             # LR decay for 20K steps in cycle #1, then decay by 5x and stay constant forever in cycle #2
             cycle_lengths=[20000, 100000000000000],
@@ -635,12 +680,59 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
         ),
         model=L(CosmosPolicyVideo2WorldModel)(
             config=dict(
-                state_t=11,  # Latent temporal dim (blank, proprio, left wrist, right wrist, primary, action, future proprio, future left wrist, future right wrist, future primary, value)
-                min_num_conditional_frames=5,  # 1 blank, 4 conditioning (proprio, left wrist, right wrist, primary)
-                max_num_conditional_frames=5,  # 1 blank, 4 conditioning (proprio, left wrist, right wrist, primary)
-                tokenizer=dict(
-                    chunk_duration=41,  # 1 blank + 40 images (4 proprio, 4 left wrist, 4 right wrist, 4 primary, 4 action, 4 future proprio, 4 future left wrist, 4 future right wrist, 4 future primary, 4 value)
+                conditioner=dict(
+                    text=dict(
+                        dropout_rate=0.0,
+                    ),
                 ),
+                # EgoVerse bimanual (use_values=True): blank + proprio + left_wrist +
+                # right_wrist + primary + action + future_proprio + future_left_wrist +
+                # future_right_wrist + future_primary + value = 11 slots
+                # Total frames: 1 + 10×4 = 41  →  chunk_duration=41, state_t=11
+                state_t=11,
+                # 1 blank + 4 conditioning slots (proprio, left wrist, right wrist, primary)
+                min_num_conditional_frames=5,
+                max_num_conditional_frames=5,
+                sigma_conditional=0.0,
+                conditioning_strategy="frame_replace",
+                denoise_replace_gt_frames=True,
+                tokenizer=dict(
+                    # 1 blank + 10 slots × 4 duplicates = 41 frames total
+                    chunk_duration=41,
+                ),
+                ema=dict(
+                    enabled=False,
+                ),
+                input_data_key="video",
+                sde=L(HybridEDMSDE)(
+                    hybrid_sigma_distribution=True,
+                    p_mean=1.3862943611198906,
+                    p_std=1.2,
+                    sigma_max=200,
+                    sigma_min=0.01,
+                    uniform_lower=1.0,
+                    uniform_upper=85.0,
+                ),
+                adjust_video_noise=True,
+                resize_online=True,
+                resolution="224",
+                high_sigma_strategy="none",
+            ),
+        ),
+        model_parallel=dict(
+            context_parallel_size=1,
+        ),
+        checkpoint=dict(
+            load_path=get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
+            load_training_state=False,
+            strict_resume=False,
+            save_iter=1000,
+            load_ema_to_reg=True,
+            load_from_object_store=dict(
+                enabled=False,
+            ),
+            save_to_object_store=dict(
+                enabled=False,
             ),
         ),
         dataloader_train=L(DataLoader)(
@@ -655,13 +747,14 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
                 shuffle=True,
                 seed=0,
             ),
-            batch_size=25,
+            batch_size=2,
             drop_last=True,
         ),
         job=dict(
             group="cosmos_v2_finetune",
             name="cosmos_predict2_2b_480p_egoverse",
         ),
+        upload_reproducible_setup=False,
     )
 )
 

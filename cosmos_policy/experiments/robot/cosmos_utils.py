@@ -922,6 +922,16 @@ def get_action(
             WRIST_IMAGE_IDX = 0
             WRIST_IMAGE2_IDX = 1
             IMAGE_IDX = 2
+        elif cfg.suite == "egoverse":
+            # EgoVerse is bimanual like ALOHA
+            all_camera_images = [
+                obs["left_wrist_image"],
+                obs["right_wrist_image"],
+                obs["primary_image"],
+            ]
+            WRIST_IMAGE_IDX = 0
+            WRIST_IMAGE2_IDX = 1
+            IMAGE_IDX = 2
         else:
             raise ValueError(f"Eval suite not implemented yet: {cfg.suite}")
 
@@ -934,7 +944,12 @@ def get_action(
         if cfg.use_proprio:
             proprio = obs["proprio"]
             if cfg.normalize_proprio:
-                proprio = rescale_proprio(proprio, dataset_stats, non_negative_only=False, scale_multiplier=1.0)
+                # Check if dataset_stats has the required keys for proprio normalization
+                if dataset_stats and "proprio_min" in dataset_stats and "proprio_max" in dataset_stats:
+                    proprio = rescale_proprio(proprio, dataset_stats, non_negative_only=False, scale_multiplier=1.0)
+                else:
+                    # Skip normalization if dataset_stats is missing or incomplete
+                    print("Warning: Skipping proprio normalization: dataset_stats missing 'proprio_min' or 'proprio_max'")
 
         # Build the raw image sequence that will be fed to the model (and the VAE tokenizer)
         image_sequence = []
@@ -1135,7 +1150,12 @@ def get_action(
 
         # Unnormalize actions back to original dataset scale
         if cfg.unnormalize_actions:
-            actions = unnormalize_actions(actions, dataset_stats)
+            # Check if dataset_stats has the required keys for action unnormalization
+            if dataset_stats and "actions_min" in dataset_stats and "actions_max" in dataset_stats:
+                actions = unnormalize_actions(actions, dataset_stats)
+            else:
+                # Skip unnormalization if dataset_stats is missing or incomplete
+                print("Warning: Skipping action unnormalization: dataset_stats missing 'actions_min' or 'actions_max'")
 
         # If generating future state and value in parallel with the actions (instead of autoregressively),
         # extract future state and value predictions from the generated sample now
@@ -1156,6 +1176,14 @@ def get_action(
                     6,
                 ]  # 0: blank, 1: curr proprio, 2: curr wrist img, 3: curr primary img, 4: curr secondary img, 5: action, 6: future proprio, 7: future wrist img, 8: future primary img, 9: future secondary img, 10: value
             elif cfg.suite == "aloha":
+                INDICES_TO_REPLACE = [
+                    0,
+                    1,
+                    5,
+                    6,
+                ]  # 0: blank, 1: curr proprio, 2: curr left wrist img, 3: curr right wrist img, 4: curr primary img, 5: action, 6: future proprio, 7: future left wrist img, 8: future right wrist img, 9: future primary img, 10: value
+            elif cfg.suite == "egoverse":
+                # EgoVerse uses same structure as ALOHA (bimanual)
                 INDICES_TO_REPLACE = [
                     0,
                     1,
@@ -1303,6 +1331,14 @@ def get_future_state_prediction(
                 6,
             ]  # 0: blank, 1: curr proprio, 2: curr wrist img, 3: curr primary img, 4: curr secondary img, 5: action, 6: future proprio, 7: future wrist img, 8: future primary img, 9: future secondary img, 10: value
         elif cfg.suite == "aloha":
+            INDICES_TO_REPLACE = [
+                0,
+                1,
+                5,
+                6,
+            ]  # 0: blank, 1: curr proprio, 2: curr left wrist img, 3: curr right wrist img, 4: curr primary img, 5: action, 6: future proprio, 7: future left wrist img, 8: future right wrist img, 9: future primary img, 10: value
+        elif cfg.suite == "egoverse":
+            # EgoVerse uses same structure as ALOHA (bimanual)
             INDICES_TO_REPLACE = [
                 0,
                 1,
@@ -2075,7 +2111,12 @@ def persistent_parallel_worker(gpu_id, cfg, dataset_stats, task_queue, result_qu
                             )
                             # Unnormalize actions
                             if cfg.unnormalize_actions:
-                                next_actions = unnormalize_actions(next_actions, dataset_stats)
+                                # Check if dataset_stats has the required keys for action unnormalization
+                                if dataset_stats and "actions_min" in dataset_stats and "actions_max" in dataset_stats:
+                                    next_actions = unnormalize_actions(next_actions, dataset_stats)
+                                else:
+                                    # Skip unnormalization if dataset_stats is missing or incomplete
+                                    print("Warning: Skipping action unnormalization: dataset_stats missing 'actions_min' or 'actions_max'")
                             # Squeeze and convert to list
                             next_actions = next_actions[0]
                             next_actions = [next_actions[i] for i in range(len(next_actions))]

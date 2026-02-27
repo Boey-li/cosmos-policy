@@ -10,8 +10,9 @@ mkdir -p "$TMPDIR/cosmos_policy_$$"
 export TMPDIR="$TMPDIR/cosmos_policy_$$"
 export IMAGINAIRE_OUTPUT_ROOT="/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/logs"
 
-uv run --extra cu128 --group libero --python 3.10 \
-  torchrun --nproc_per_node=1 --master_port=12341 -m cosmos_policy.scripts.train \
+# source /coc/flash7/bli678/Projects/EgoVerse/emimic/bin/activate
+
+torchrun --nproc_per_node=1 --master_port=12341 -m cosmos_policy.scripts.train \
   --config=cosmos_policy/config/config.py -- \
   experiment="cosmos_predict2_2b_480p_libero_one_demo_one_episode" \
   trainer.grad_accum_iter=1
