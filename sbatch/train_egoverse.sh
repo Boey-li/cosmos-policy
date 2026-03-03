@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=cosmos_egoverse_train
-#SBATCH --output=sbatch_logs/cosmos_egoverse_train.out
-#SBATCH --error=sbatch_logs/cosmos_egoverse_train.err
+#SBATCH --output=sbatch_logs/cosmos_egoverse_train_2.out
+#SBATCH --error=sbatch_logs/cosmos_egoverse_train_2.err
 #SBATCH --partition="rl2-lab"
 #SBATCH --account="rl2-lab"
 #SBATCH --nodes=1

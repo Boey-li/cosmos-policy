@@ -723,11 +723,11 @@ cosmos_predict2_2b_480p_aloha_one_demo_one_episode = LazyDict(
 
 
 # *** EgoVerse Dataset Config ***
-# Mirrors egomimic/hydra_configs/data/debug.yaml:
-#   demo    block → filters,         is_rollout=False  (rollout_data_mask=0)
-#   rollout block → rollout_filters, is_rollout=True   (rollout_data_mask=1)
+# Mirrors egomimic/hydra_configs/data/debug.yaml train_datasets block:
+#   demo    block → is_rollout=False  (rollout_data_mask=0)
+#   rollout block → is_rollout=True   (rollout_data_mask=1)
 #
-# Video sequence (use_proprio=True, use_values=False, num_duplicates_per_image=4):
+# Video sequence (use_proprio=True, use_values=True, num_duplicates_per_image=4):
 #   slot 0: blank (1)
 #   slot 1: curr proprio (4)
 #   slot 2: curr left wrist (4)
@@ -738,38 +738,59 @@ cosmos_predict2_2b_480p_aloha_one_demo_one_episode = LazyDict(
 #   slot 7: future left wrist (4)
 #   slot 8: future right wrist (4)
 #   slot 9: future primary (4)
-#   [no value slot when use_values=False – mirrors egomimic exactly]
-#   Total frames: 1 + 9×4 = 37  →  chunk_duration=37, state_t=10
+#   slot 10: value (4)
+#   Total frames: 1 + 10×4 = 41  →  chunk_duration=41, state_t=11
 egoverse_cosmos_policy = L(EgoVerseDataset)(
-    embodiment="eva_bimanual",
-    mode="total",
-    temp_root="/coc/flash7/scratch/egowm/wmprocessedDataset/",
+    # ── Shared infrastructure (defaults propagated to all sub-datasets) ─────────
+    temp_root="/coc/flash7/scratch/egowm/egoverseS3Dataset",
     cache_root="/coc/flash7/scratch/egowm/.cache",
-    # ── demo block (is_rollout=False) ─────────────────────────────────────────
-    filters={"episode_hash": "2026-01-22-18-57-54-150000"},
-    # ── rollout block (is_rollout=True) – set to None for demo-only training ──
-    # Uncomment and point at your rollout data to enable WM + VF training:
-    # rollout_filters={"episode_hash": "YOUR_ROLLOUT_EPISODE_HASH"},
-    rollout_filters={"episode_hash": "2026-01-22-18-57-54-150000"},
-    rollout_success=True,            # success=true in debug.yaml
-    p_world_model=0.5,               # p_world_model=0.5 in debug.yaml
-    demonstration_sampling_prob=1.0, # 1.0 = demo-only; set 0.5 for 50/50 mix
-    # ── shared params ─────────────────────────────────────────────────────────
+    wm_root="/coc/flash7/scratch/egowm/wmprocessedDataset",
     t5_text_embeddings_path="/coc/flash7/scratch/egowm/wmprocessedDataset/t5_embeddings.pkl",
-    chunk_size=25,                   # matches egomimic action_chunk=25
-    use_future=True,                 # request future.* keys from S3RLDBDataset
+    # ── Cosmos-policy rendering params ──────────────────────────────────────────
+    chunk_size=25,
     use_image_aug=True,
     use_stronger_image_aug=True,
     use_proprio=True,
     use_values=True,
-    normalize_proprio=True,
     normalize_actions=True,
-    num_duplicates_per_image=4,      # WAN 2.1 tokenizer
+    normalize_proprio=True,
+    num_duplicates_per_image=4,
     primary_camera_key="observations.images.front_img_1",
     left_wrist_camera_key="observations.images.left_wrist_img",
     right_wrist_camera_key="observations.images.right_wrist_img",
     proprio_key="observations.state.ee_pose",
     action_key="actions_cartesian",
+    # ── Per-dataset config (mirrors debug.yaml train_datasets) ──────────────────
+    train_datasets={
+        # Demonstration dataset – trains the policy (rollout_data_mask=0 for all samples)
+        "demo": {
+            "_target_":         "egomimic.rldb.utils.S3RLDBDataset",
+            "bucket_name":      "rldb",
+            "mode":             "total",
+            "embodiment":       "eva_bimanual",
+            "filters":          {"episode_hash": "2026-01-22-18-57-54-150000"},
+            "local_files_only": True,
+            "use_future":       True,
+            "action_chunk":     25,
+            "is_rollout":       False,   # → rollout_data_mask=0, policy BC loss only
+        },
+        # Rollout dataset – trains world model + value function (rollout_data_mask=1).
+        # For debug we reuse the same demo episode as synthetic rollouts (success=True).
+        # In production, point this at actual robot-rollout data with success/failure labels.
+        "rollout": {
+            "_target_":         "egomimic.rldb.utils.S3RLDBDataset",
+            "bucket_name":      "rldb",
+            "mode":             "total",
+            "embodiment":       "eva_bimanual",
+            "filters":          {"episode_hash": "2026-01-22-18-57-54-150000"},
+            "local_files_only": True,
+            "use_future":       True,
+            "action_chunk":     25,
+            "is_rollout":       True,    # → rollout_data_mask=1, WM + VF losses
+            "success":          True,    # all debug rollouts treated as successful
+            "p_world_model":    0.5,     # 50 % WM samples, 50 % VF samples among rollouts
+        },
+    },
 )
 
 cosmos_predict2_2b_480p_egoverse = LazyDict(
@@ -790,14 +811,14 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
             ),
             run_validation=False,
             logging_iter=100,
-            max_iter=50000,
+            max_iter=100000,
             straggler_detection=dict(
                 enabled=False,
             ),
         ),
         scheduler=dict(
             # LR decay for 20K steps in cycle #1, then decay by 5x and stay constant forever in cycle #2
-            cycle_lengths=[20000, 100000000000000],
+            cycle_lengths=[40000, 100000000000000],
             warm_up_steps=[2000, 0],
             f_start=[1e-6, 0.06],
             f_max=[1.0, 0.06],
@@ -848,7 +869,7 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
             context_parallel_size=1,
         ),
         checkpoint=dict(
-            load_path=get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
+            load_path="", #get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
             load_training_state=False,
             strict_resume=False,
             save_iter=10000,
@@ -861,7 +882,7 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
             ),
         ),
         dataloader_train=L(DataLoader)(
-            num_workers=12,
+            num_workers=8,
             persistent_workers=True,
             pin_memory=True,
             dataset=egoverse_cosmos_policy,
@@ -872,7 +893,7 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
                 shuffle=True,
                 seed=0,
             ),
-            batch_size=2,
+            batch_size=4,
             drop_last=True,
         ),
         job=dict(

@@ -99,8 +99,8 @@ class PolicyEvalVisualizeConfig:
     use_variance_scale: bool = False
     use_jpeg_compression: bool = True
     trained_with_image_aug: bool = True
-    unnormalize_actions: bool = False  
-    normalize_proprio: bool = False 
+    unnormalize_actions: bool = True   # de-normalize model predictions back to raw scale
+    normalize_proprio: bool = False    # proprio is already normalized by EgoVerseDataset; do NOT re-normalize here
     randomize_seed: bool = False
     ar_future_prediction: bool = False
     ar_value_prediction: bool = False
@@ -651,7 +651,36 @@ def eval_egoverse_visualize(cfg: PolicyEvalVisualizeConfig):
     # ── Load dataset from config ──────────────────────────────────────────
     log_message("Instantiating EgoVerseDataset from cosmos config...", None)
     dataset = instantiate(cosmos_config.dataloader_train.dataset)
-    dataset_stats = getattr(dataset, "dataset_stats", {})
+
+    # Build dataset_stats from EgoVerseDataset's min-max norm stats so that
+    # cosmos_utils.unnormalize_actions / rescale_proprio can work correctly.
+    # Keys expected by cosmos_utils: "actions_min", "actions_max",
+    #                                "proprio_min", "proprio_max"
+    dataset_stats = {}
+    norm = getattr(dataset, "_norm_stats", {})
+    action_key = getattr(dataset, "action_key", "actions_cartesian")
+    proprio_key = getattr(dataset, "proprio_key", "observations.state.ee_pose")
+    if action_key in norm:
+        dataset_stats["actions_min"] = norm[action_key]["min"].numpy()
+        dataset_stats["actions_max"] = norm[action_key]["max"].numpy()
+        log_message(
+            f"dataset_stats: actions_min shape={dataset_stats['actions_min'].shape}, "
+            f"actions_max shape={dataset_stats['actions_max'].shape}",
+            None,
+        )
+    else:
+        logger.warning(
+            "No min-max stats found for action key '%s' in dataset._norm_stats; "
+            "action de-normalization will be skipped.", action_key
+        )
+    if proprio_key in norm:
+        dataset_stats["proprio_min"] = norm[proprio_key]["min"].numpy()
+        dataset_stats["proprio_max"] = norm[proprio_key]["max"].numpy()
+    else:
+        logger.warning(
+            "No min-max stats found for proprio key '%s' in dataset._norm_stats; "
+            "proprio normalization in get_action will be skipped.", proprio_key
+        )
 
     # Verify chunk size matches
     ds_chunk = getattr(dataset, "chunk_size", cfg.chunk_size)
