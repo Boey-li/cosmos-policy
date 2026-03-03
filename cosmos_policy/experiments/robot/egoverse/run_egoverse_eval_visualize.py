@@ -55,7 +55,9 @@ from PIL import Image as PILImage, ImageDraw as PILDraw
 from cosmos_policy._src.imaginaire.lazy_config import instantiate
 from cosmos_policy.experiments.robot.cosmos_utils import (
     DEVICE,
-    extract_action_chunk_from_latent_sequence,
+    get_action,
+    get_future_state_prediction,
+    get_value_prediction,
     get_model,
 )
 from cosmos_policy.experiments.robot.robot_utils import log_message, setup_logging
@@ -85,8 +87,28 @@ class PolicyEvalVisualizeConfig:
     config_file: str = "cosmos_policy/config/config.py"
 
     # ── Inference ─────────────────────────────────────────────────────────
-    num_denoising_steps: int = 5                        # diffusion steps
+    suite: str = "egoverse"
+    num_denoising_steps: int = 35                        # diffusion steps
     chunk_size: int = 25                                # must match dataset
+    use_third_person_image: bool = True
+    num_third_person_images: int = 1
+    use_wrist_image: bool = True
+    num_wrist_images: int = 2
+    use_proprio: bool = True
+    flip_images: bool = False
+    use_variance_scale: bool = False
+    use_jpeg_compression: bool = True
+    trained_with_image_aug: bool = True
+    unnormalize_actions: bool = False  
+    normalize_proprio: bool = False 
+    randomize_seed: bool = False
+    ar_future_prediction: bool = False
+    ar_value_prediction: bool = False
+    ar_qvalue_prediction: bool = False
+    num_denoising_steps_future_state: int = 1
+    use_ensemble_future_state_predictions: bool = False
+    num_future_state_predictions_in_ensemble: int = 3
+    future_state_ensemble_aggregation_scheme: str = "average"
 
     # ── Output ────────────────────────────────────────────────────────────
     save_video_path: str = "./visualizations"
@@ -392,28 +414,24 @@ def visualize_episode(
     frame_pairs: list,       # list of (frame_index, global_dataset_idx)
     model,
     dataset,
+    dataset_stats: dict,
     device: torch.device,
     camera_transforms,
     log_file=None,
-) -> str:
+) -> tuple:
     """
     Run inference and produce a visualization MP4 for one episode.
 
     For each timestep:
-      1. dataset[global_idx] → cosmos_batch (already in egomimic format)
-      2. model.generate_samples_from_batch → generated_latent
-      3. extract_action_chunk_from_latent_sequence → predicted actions
-      4. decode_wm_future_images → WM-decoded future images
-      5. build_visualization_frame → 3-panel strip (egomimic style)
+      1. Build observation from raw data
+      2. get_action() → predicted actions and future images
+      3. Compute losses (action MSE/L1, image MSE/L1)
+      4. build_visualization_frame → 3-panel strip (egomimic style)
+    
+    Returns:
+        tuple: (video_path, episode_losses_dict)
     """
     s3_ds  = dataset.demo_dataset
-
-    # Infer model dtype once (e.g., bfloat16) so inputs match weights.
-    model_dtype: Optional[torch.dtype] = None
-    for p in model.parameters():
-        if torch.is_floating_point(p):
-            model_dtype = p.dtype
-            break
 
     os.makedirs(cfg.save_video_path, exist_ok=True)
     video_path  = os.path.join(
@@ -424,36 +442,65 @@ def visualize_episode(
 
     log_message(f"Episode {episode_idx}: {len(frame_pairs)} steps → {video_path}", log_file)
 
+    # Initialize loss accumulators
+    action_mse_losses = []
+    action_l1_losses = []
+    image_mse_losses = []
+    image_l1_losses = []
+    wrist_image_mse_losses = []
+    wrist_image_l1_losses = []
+
     for step, (_, global_idx) in enumerate(tqdm.tqdm(frame_pairs, desc=f"ep {episode_idx}")):
         try:
-            # ── 1. Get preprocessed sample (cosmos_batch format) ───────────
+            # ── 1. Get sample data ─────────────────────────────────────────
             sample = dataset[global_idx]
-            cosmos_batch = _batch_sample(sample, device, model_dtype)
+            raw_item = s3_ds[global_idx]
 
-            # ── 2. Model inference ─────────────────────────────────────────
-            with torch.no_grad():
-                generated_latent, orig_clean_latent_frames = (
-                    model.generate_samples_from_batch(
-                        cosmos_batch,
-                        num_steps=cfg.num_denoising_steps,
-                        return_orig_clean_latent_frames=True,
-                    )
-                )
+            # ── 2. Build observation and run model prediction (ALOHA-consistent path) ──
+            def _raw_img(key):
+                v = raw_item.get(key)
+                if v is None:
+                    return None
+                img = _to_uint8(v.cpu().numpy() if isinstance(v, torch.Tensor) else v)
+                return dataset._ensure_size(img)
 
-            # ── 3. Extract predicted action chunk ──────────────────────────
-            action_shape = (
-                int(cosmos_batch["actions"].shape[1]),
-                int(cosmos_batch["actions"].shape[2]),
+            observation = {
+                "primary_image": _raw_img(dataset.primary_camera_key),
+                "left_wrist_image": _raw_img(dataset.left_wrist_camera_key),
+                "right_wrist_image": _raw_img(dataset.right_wrist_camera_key),
+                "proprio": (
+                    sample["proprio"].cpu().numpy()
+                    if isinstance(sample.get("proprio"), torch.Tensor)
+                    else np.asarray(sample.get("proprio"), dtype=np.float32)
+                ),
+            }
+            # Ensure proprio is 1-D for get_action.
+            if observation["proprio"] is not None and observation["proprio"].ndim > 1:
+                observation["proprio"] = observation["proprio"][0]
+
+            task_description = sample.get("command", "")
+            action_return_dict = get_action(
+                cfg=cfg,
+                model=model,
+                dataset_stats=dataset_stats,
+                obs=observation,
+                task_label_or_embedding=task_description,
+                seed=cfg.seed + step,
+                randomize_seed=cfg.randomize_seed,
+                num_denoising_steps_action=cfg.num_denoising_steps,
+                generate_future_state_and_value_in_parallel=not (
+                    cfg.ar_future_prediction or cfg.ar_value_prediction or cfg.ar_qvalue_prediction
+                ),
             )
-            pred_actions_tensor = extract_action_chunk_from_latent_sequence(
-                generated_latent,
-                action_shape=action_shape,
-                action_indices=cosmos_batch["action_latent_idx"],
-            )  # (1, chunk_size, action_dim)
-            pred_actions = pred_actions_tensor[0].cpu().numpy()  # (chunk_size, action_dim)
+
+            pred_actions_chunk = action_return_dict["actions"]
+            pred_actions = np.asarray(pred_actions_chunk, dtype=np.float32)
+            if pred_actions.ndim == 3:
+                pred_actions = pred_actions.squeeze(1)
+            elif pred_actions.ndim == 1:
+                pred_actions = pred_actions[None, :]
 
             # GT actions from sample (raw / un-normalized from S3RLDBDataset)
-            raw_item = s3_ds[global_idx]
             raw_action = raw_item.get(dataset.action_key)
             if isinstance(raw_action, torch.Tensor):
                 raw_action = raw_action.cpu().numpy()
@@ -462,20 +509,28 @@ def visualize_episode(
                 raw_action = raw_action[np.newaxis, :]
             gt_actions = raw_action[: cfg.chunk_size]  # (chunk_size, action_dim)
 
-            # ── 4. Decode WM future images ─────────────────────────────────
-            wm_preds = decode_wm_future_images(
-                model, generated_latent, orig_clean_latent_frames, cosmos_batch
-            )
-
-            # ── 5. Get raw images for visualization ────────────────────────
-            def _raw_img(key):
-                v = raw_item.get(key)
-                if v is None:
-                    return None
-                img = _to_uint8(
-                    v.cpu().numpy() if isinstance(v, torch.Tensor) else v
+            # ── 3. Get WM image predictions (same flow as ALOHA visualize) ─
+            wm_preds = action_return_dict.get("future_image_predictions", {})
+            if cfg.ar_future_prediction:
+                future_state_return_dict = get_future_state_prediction(
+                    cfg,
+                    model=model,
+                    data_batch=action_return_dict["data_batch"],
+                    generated_latent_with_action=action_return_dict["generated_latent"],
+                    orig_clean_latent_frames=action_return_dict["orig_clean_latent_frames"],
+                    future_proprio_latent_idx=action_return_dict["latent_indices"]["future_proprio_latent_idx"],
+                    future_wrist_image_latent_idx=action_return_dict["latent_indices"]["future_wrist_image_latent_idx"],
+                    future_wrist_image2_latent_idx=action_return_dict["latent_indices"]["future_wrist_image2_latent_idx"],
+                    future_image_latent_idx=action_return_dict["latent_indices"]["future_image_latent_idx"],
+                    future_image2_latent_idx=action_return_dict["latent_indices"]["future_image2_latent_idx"],
+                    seed=cfg.seed + step,
+                    randomize_seed=cfg.randomize_seed,
+                    num_denoising_steps_future_state=cfg.num_denoising_steps_future_state,
+                    use_ensemble_future_state_predictions=cfg.use_ensemble_future_state_predictions,
+                    num_future_state_predictions_in_ensemble=cfg.num_future_state_predictions_in_ensemble,
+                    future_state_ensemble_aggregation_scheme=cfg.future_state_ensemble_aggregation_scheme,
                 )
-                return dataset._ensure_size(img)
+                wm_preds = future_state_return_dict.get("future_image_predictions", wm_preds)
 
             current_primary  = _raw_img(dataset.primary_camera_key)
             gt_future_primary = _raw_img(f"future.{dataset.primary_camera_key}")
@@ -486,16 +541,53 @@ def visualize_episode(
                 gt_future_primary = np.zeros_like(current_primary)
 
             # WM predicted images: (1, H, W, 3) → (H, W, 3)
-            wm_primary = (
-                wm_preds["future_image_pred"][0] if wm_preds else
-                np.zeros_like(current_primary)
-            )
-            wm_left_wrist = (
-                wm_preds.get("future_wrist_image_pred", np.zeros((1,) + current_primary.shape))[0]
-                if wm_preds else None
-            )
+            wm_primary = wm_preds.get("future_image", None)
+            wm_left_wrist = wm_preds.get("future_wrist_image", None)
 
-            # ── 6. Build frame (egomimic visualize_preds layout) ───────────
+            if isinstance(wm_primary, torch.Tensor):
+                wm_primary = wm_primary.cpu().numpy()
+            if isinstance(wm_left_wrist, torch.Tensor):
+                wm_left_wrist = wm_left_wrist.cpu().numpy()
+            if wm_primary is not None and getattr(wm_primary, "ndim", 0) == 4:
+                wm_primary = wm_primary[0]
+            if wm_left_wrist is not None and getattr(wm_left_wrist, "ndim", 0) == 4:
+                wm_left_wrist = wm_left_wrist[0]
+            if wm_primary is None:
+                wm_primary = np.zeros_like(current_primary)
+
+            # ── 4. Compute losses ───────────────────────────────────────────
+            # Action losses (compare first action of chunk)
+            if len(pred_actions) > 0 and len(gt_actions) > 0:
+                pred_action_first = pred_actions[0]  # (action_dim,)
+                gt_action_first = gt_actions[0]    # (action_dim,)
+                action_diff = pred_action_first - gt_action_first
+                action_mse = np.mean(action_diff ** 2)
+                action_l1 = np.mean(np.abs(action_diff))
+                action_mse_losses.append(action_mse)
+                action_l1_losses.append(action_l1)
+
+            # Image losses (primary future image)
+            if wm_primary is not None and gt_future_primary is not None:
+                # Convert to float and normalize to [0, 1] for loss computation
+                wm_primary_float = wm_primary.astype(np.float32) / 255.0
+                gt_future_primary_float = gt_future_primary.astype(np.float32) / 255.0
+                image_diff = wm_primary_float - gt_future_primary_float
+                image_mse = np.mean(image_diff ** 2)
+                image_l1 = np.mean(np.abs(image_diff))
+                image_mse_losses.append(image_mse)
+                image_l1_losses.append(image_l1)
+
+            # Wrist image losses
+            if wm_left_wrist is not None and gt_future_left_wrist is not None:
+                wm_left_wrist_float = wm_left_wrist.astype(np.float32) / 255.0
+                gt_future_left_wrist_float = gt_future_left_wrist.astype(np.float32) / 255.0
+                wrist_image_diff = wm_left_wrist_float - gt_future_left_wrist_float
+                wrist_image_mse = np.mean(wrist_image_diff ** 2)
+                wrist_image_l1 = np.mean(np.abs(wrist_image_diff))
+                wrist_image_mse_losses.append(wrist_image_mse)
+                wrist_image_l1_losses.append(wrist_image_l1)
+
+            # ── 5. Build frame (egomimic visualize_preds layout) ───────────
             frame = build_visualization_frame(
                 current_primary=current_primary,
                 gt_future_primary=gt_future_primary,
@@ -519,7 +611,19 @@ def visualize_episode(
 
     writer.close()
     log_message(f"Saved: {video_path}", log_file)
-    return video_path
+    
+    # Compute episode-level average losses
+    episode_losses = {
+        "action_mse": np.mean(action_mse_losses) if action_mse_losses else 0.0,
+        "action_l1": np.mean(action_l1_losses) if action_l1_losses else 0.0,
+        "image_mse": np.mean(image_mse_losses) if image_mse_losses else 0.0,
+        "image_l1": np.mean(image_l1_losses) if image_l1_losses else 0.0,
+        "wrist_image_mse": np.mean(wrist_image_mse_losses) if wrist_image_mse_losses else 0.0,
+        "wrist_image_l1": np.mean(wrist_image_l1_losses) if wrist_image_l1_losses else 0.0,
+        "num_frames": len(frame_pairs),
+    }
+    
+    return video_path, episode_losses
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +651,7 @@ def eval_egoverse_visualize(cfg: PolicyEvalVisualizeConfig):
     # ── Load dataset from config ──────────────────────────────────────────
     log_message("Instantiating EgoVerseDataset from cosmos config...", None)
     dataset = instantiate(cosmos_config.dataloader_train.dataset)
+    dataset_stats = getattr(dataset, "dataset_stats", {})
 
     # Verify chunk size matches
     ds_chunk = getattr(dataset, "chunk_size", cfg.chunk_size)
@@ -596,18 +701,88 @@ def eval_egoverse_visualize(cfg: PolicyEvalVisualizeConfig):
 
     # ── Visualize ─────────────────────────────────────────────────────────
     os.makedirs(cfg.save_video_path, exist_ok=True)
+    
+    # Initialize global loss accumulators
+    all_action_mse = []
+    all_action_l1 = []
+    all_image_mse = []
+    all_image_l1 = []
+    all_wrist_image_mse = []
+    all_wrist_image_l1 = []
+    total_frames = 0
+    
     for ep_idx, frame_pairs in tqdm.tqdm(episodes.items(), desc="Episodes"):
-        visualize_episode(
+        video_path, episode_losses = visualize_episode(
             cfg=cfg,
             episode_idx=ep_idx,
             frame_pairs=frame_pairs,
             model=model,
             dataset=dataset,
+            dataset_stats=dataset_stats,
             device=device,
             camera_transforms=camera_transforms,
             log_file=log_file,
         )
+        
+        # Accumulate losses
+        if episode_losses["action_mse"] > 0:
+            all_action_mse.append(episode_losses["action_mse"])
+        if episode_losses["action_l1"] > 0:
+            all_action_l1.append(episode_losses["action_l1"])
+        if episode_losses["image_mse"] > 0:
+            all_image_mse.append(episode_losses["image_mse"])
+        if episode_losses["image_l1"] > 0:
+            all_image_l1.append(episode_losses["image_l1"])
+        if episode_losses["wrist_image_mse"] > 0:
+            all_wrist_image_mse.append(episode_losses["wrist_image_mse"])
+        if episode_losses["wrist_image_l1"] > 0:
+            all_wrist_image_l1.append(episode_losses["wrist_image_l1"])
+        total_frames += episode_losses["num_frames"]
+        
+        log_message(
+            f"Episode {ep_idx} losses - "
+            f"Action MSE: {episode_losses['action_mse']:.6f}, L1: {episode_losses['action_l1']:.6f} | "
+            f"Image MSE: {episode_losses['image_mse']:.6f}, L1: {episode_losses['image_l1']:.6f} | "
+            f"Wrist MSE: {episode_losses['wrist_image_mse']:.6f}, L1: {episode_losses['wrist_image_l1']:.6f}",
+            log_file
+        )
 
+    # ── Print final loss summary ──────────────────────────────────────────
+    log_message("=" * 80, log_file)
+    log_message("FINAL EVALUATION LOSS SUMMARY", log_file)
+    log_message("=" * 80, log_file)
+    log_message(f"Total frames evaluated: {total_frames}", log_file)
+    log_message(f"Total episodes: {len(episodes)}", log_file)
+    log_message("", log_file)
+    
+    if all_action_mse:
+        log_message(
+            f"Action Losses (averaged over {len(all_action_mse)} episodes):",
+            log_file
+        )
+        log_message(f"  MSE: {np.mean(all_action_mse):.6f} (std: {np.std(all_action_mse):.6f})", log_file)
+        log_message(f"  L1:  {np.mean(all_action_l1):.6f} (std: {np.std(all_action_l1):.6f})", log_file)
+        log_message("", log_file)
+    
+    if all_image_mse:
+        log_message(
+            f"Primary Image Losses (averaged over {len(all_image_mse)} episodes):",
+            log_file
+        )
+        log_message(f"  MSE: {np.mean(all_image_mse):.6f} (std: {np.std(all_image_mse):.6f})", log_file)
+        log_message(f"  L1:  {np.mean(all_image_l1):.6f} (std: {np.std(all_image_l1):.6f})", log_file)
+        log_message("", log_file)
+    
+    if all_wrist_image_mse:
+        log_message(
+            f"Wrist Image Losses (averaged over {len(all_wrist_image_mse)} episodes):",
+            log_file
+        )
+        log_message(f"  MSE: {np.mean(all_wrist_image_mse):.6f} (std: {np.std(all_wrist_image_mse):.6f})", log_file)
+        log_message(f"  L1:  {np.mean(all_wrist_image_l1):.6f} (std: {np.std(all_wrist_image_l1):.6f})", log_file)
+        log_message("", log_file)
+    
+    log_message("=" * 80, log_file)
     log_message("Done.", log_file)
     if log_file:
         log_file.close()

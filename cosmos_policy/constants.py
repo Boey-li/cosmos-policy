@@ -43,12 +43,20 @@ ALOHA_CONSTANTS = {
     "PROPRIO_DIM": 14,
 }
 
+EGOVERSE_CONSTANTS = {
+    "NUM_ACTIONS_CHUNK": 25,
+    "ACTION_DIM": 14,
+    "PROPRIO_DIM": 14,
+}
+
 
 # Function to detect robot platform from command line arguments
 def detect_robot_platform():
     cmd_args = " ".join(sys.argv).lower()
 
-    if "libero" in cmd_args:
+    if "egoverse" in cmd_args:
+        return "EGOVERSE"
+    elif "libero" in cmd_args:
         return "LIBERO"
     elif "robocasa" in cmd_args:
         return "ROBOCASA"
@@ -63,7 +71,9 @@ def detect_robot_platform():
 ROBOT_PLATFORM = detect_robot_platform()
 
 # Set the appropriate constants based on the detected platform
-if ROBOT_PLATFORM == "LIBERO":
+if ROBOT_PLATFORM == "EGOVERSE":
+    constants = EGOVERSE_CONSTANTS
+elif ROBOT_PLATFORM == "LIBERO":
     constants = LIBERO_CONSTANTS
 elif ROBOT_PLATFORM == "ROBOCASA":
     constants = ROBOCASA_CONSTANTS

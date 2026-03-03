@@ -162,6 +162,9 @@ class ALOHADataset(Dataset):
         load_all_rollouts_into_ram: bool = False,
         use_third_person_images: bool = True,
         use_wrist_images: bool = True,
+        max_demos: int = None,
+        max_rollout_episodes: int = None,
+        max_frames_per_episode: int = None,
     ):
         """
         Initialize ALOHA dataset for training.
@@ -194,6 +197,9 @@ class ALOHADataset(Dataset):
             treat_success_rollouts_as_demos (bool): If True, copy successful rollout episodes into demonstration dataset (self.data)
             use_third_person_images (bool): This is a null arg that is always True. We need it here to match the signature of the LIBERODataset class.
             use_wrist_images (bool): This is a null arg that is always True. We need it here to match the signature of the LIBERODataset class.
+            max_demos (int): Maximum number of demos to load (None = load all)
+            max_rollout_episodes (int): Maximum number of rollout episodes to load (None = load all)
+            max_frames_per_episode (int): Maximum number of frames to keep per episode (None = keep all)
         """
         self.data_dir = data_dir
         self.chunk_size = chunk_size
@@ -220,6 +226,9 @@ class ALOHADataset(Dataset):
         self.treat_success_rollouts_as_demos = treat_success_rollouts_as_demos
         self.use_jpeg_for_rollouts = use_jpeg_for_rollouts
         self.load_all_rollouts_into_ram = load_all_rollouts_into_ram
+        self.max_demos = max_demos
+        self.max_rollout_episodes = max_rollout_episodes
+        self.max_frames_per_episode = max_frames_per_episode
         self._jpeg_rollout_hint_emitted = False
 
         # Get all HDF5 files in data directory
@@ -228,6 +237,10 @@ class ALOHADataset(Dataset):
         # In debug mode, only load the first demo
         if os.environ.get("DEBUGGING", "False").lower() == "true":
             hdf5_files = hdf5_files[:1]
+
+        # Limit HDF5 files for demos if max_demos is set
+        if self.max_demos is not None and self.max_demos > 0:
+            hdf5_files = hdf5_files[:1]  # Only use first file when limiting demos
 
         # Load all episodes into RAM
         # Save dataset in this structure:
@@ -324,6 +337,20 @@ class ALOHADataset(Dataset):
                     raise ValueError(f"Unknown command: {raw_file_string}")
                 command = raw_file_string.replace("_", " ")
                 self.unique_commands.add(command)
+
+                # Limit frames per episode if requested
+                if self.max_frames_per_episode is not None and self.max_frames_per_episode > 0:
+                    n = min(episode_num_steps, self.max_frames_per_episode)
+                    actions = actions[:n]
+                    proprio = proprio[:n]
+                    if images is not None:
+                        images = images[:n]
+                    if left_wrist_images is not None:
+                        left_wrist_images = left_wrist_images[:n]
+                    if right_wrist_images is not None:
+                        right_wrist_images = right_wrist_images[:n]
+                    episode_num_steps = n
+
                 num_steps = episode_num_steps
                 # Add value function returns if applicable
                 if self.return_value_function_returns:
@@ -437,6 +464,10 @@ class ALOHADataset(Dataset):
             # In debug mode, only load the first few rollout files
             if os.environ.get("DEBUGGING", "False").lower() == "true":
                 rollout_hdf5_files = rollout_hdf5_files[:10]
+
+            # Limit rollout episodes if max_rollout_episodes is set
+            if self.max_rollout_episodes is not None and self.max_rollout_episodes > 0:
+                rollout_hdf5_files = rollout_hdf5_files[:1]  # Only use first file when limiting rollout episodes
 
             for file in tqdm(rollout_hdf5_files, desc="Loading ALOHA rollout metadata"):
                 with h5py.File(file, "r") as f:

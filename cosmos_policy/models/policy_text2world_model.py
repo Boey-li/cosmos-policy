@@ -445,6 +445,7 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             mask_B_T = torch.zeros(
                 (B, T), dtype=torch.long, device=sigma_B_T.device
             )  # All 0s mask, to be filled with 1s for the relevant timesteps
+            
             # Demo samples (rollout_data_mask == 0)
             demo_idx_B = (rollout_data_mask == 0).to(torch.long).to(sigma_B_T.device)
             if torch.any(demo_idx_B):
@@ -452,6 +453,7 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
                     torch.nonzero(demo_idx_B, as_tuple=False).squeeze(-1).to(torch.long).to(sigma_B_T.device)
                 )
                 mask_B_T[demo_batch_indices, action_indices[demo_batch_indices]] = 1
+            
             # Rollout world-model samples (rollout_data_mask == 1 and world_model_sample_mask == 1)
             world_idx_B = (rollout_data_mask == 1) & (world_model_sample_mask == 1).to(torch.long).to(sigma_B_T.device)
             if torch.any(world_idx_B):
@@ -472,6 +474,7 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
                     mask_B_T[world_batch_indices, future_wrist_image2_indices[world_batch_indices]] = 1
                 if torch.all(future_proprio_indices != -1):  # -1 indicates future proprio is not used
                     mask_B_T[world_batch_indices, future_proprio_indices[world_batch_indices]] = 1
+            
             # Rollout value-function samples (rollout_data_mask == 1 and value_function_sample_mask == 1)
             value_idx_B = (
                 ((rollout_data_mask == 1) & (value_function_sample_mask == 1)).to(torch.long).to(sigma_B_T.device)
@@ -495,6 +498,7 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
             mask_B_T = torch.zeros(
                 (B, T), dtype=torch.long, device=sigma_B_T.device
             )  # All 0s mask, to be filled with 1s for the relevant timesteps
+            
             # Demo samples (rollout_data_mask == 0)
             demo_idx_B = (rollout_data_mask == 0).to(torch.long).to(sigma_B_T.device)
             if torch.any(demo_idx_B):
@@ -516,6 +520,7 @@ class CosmosPolicyDiffusionModel(BaseDiffusionModel):
                     mask_B_T[demo_batch_indices, future_wrist_image2_indices[demo_batch_indices]] = 1
                 if torch.all(future_proprio_indices != -1):  # -1 indicates future proprio is not used
                     mask_B_T[demo_batch_indices, future_proprio_indices[demo_batch_indices]] = 1
+            
             # Rollout world-model samples (rollout_data_mask == 1 and world_model_sample_mask == 1)
             world_idx_B = (rollout_data_mask == 1) & (world_model_sample_mask == 1).to(torch.long).to(sigma_B_T.device)
             if torch.any(world_idx_B):

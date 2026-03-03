@@ -596,6 +596,131 @@ cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbow
     )
 )
 
+# *** Limited dataset for testing: one demo and one episode (ALOHA) ***
+aloha_one_demo_one_episode_dataset = L(ALOHADataset)(
+    data_dir=os.path.join(BASE_DATASETS_DIR, "ALOHA-Cosmos-Policy", "preprocessed"),
+    t5_text_embeddings_path=os.path.join(BASE_DATASETS_DIR, "ALOHA-Cosmos-Policy", "preprocessed", "t5_embeddings.pkl"),
+    chunk_size=50,
+    use_image_aug=True,
+    use_stronger_image_aug=True,
+    use_proprio=True,
+    normalize_proprio=True,
+    normalize_actions=True,
+    num_duplicates_per_image=4,  # WAN 2.1 tokenizer: 4 images per latent frame
+    treat_demos_as_success_rollouts=True,  # Include demos as success rollouts
+    demonstration_sampling_prob=0.5,
+    success_rollout_sampling_prob=0.5,
+    return_value_function_returns=True,
+    gamma=0.998,  # Higher gamma for ALOHA because episodes can have up to 1.5-2.0K steps
+    max_demos=1,  # Only load first demo
+    max_rollout_episodes=1,  # Only load first episode
+)
+cosmos_predict2_2b_480p_aloha_one_demo_one_episode = LazyDict(
+    dict(
+        defaults=[
+            "/experiment/cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80",
+            "_self_",
+        ],
+        trainer=dict(
+            callbacks=dict(
+                every_n_sample_reg=dict(
+                    every_n=100000,
+                    save_s3=False,
+                    use_negative_prompt=False,
+                    guidance=[0],
+                    num_sampling_step=9,
+                ),
+            ),
+            run_validation=False,
+            logging_iter=100,
+            max_iter=50000,  # Reduced for testing with limited data
+            straggler_detection=dict(
+                enabled=False,
+            ),
+        ),
+        scheduler=dict(
+            # LR decay for 20K steps in cycle #1, then decay by 5x and stay constant forever in cycle #2
+            cycle_lengths=[20000, 100000000000000],
+            warm_up_steps=[2000, 0],
+            f_start=[1e-6, 0.06],
+            f_max=[1.0, 0.06],
+            f_min=[0.3, 0.06],
+        ),
+        model=L(CosmosPolicyVideo2WorldModel)(
+            config=dict(
+                conditioner=dict(
+                    text=dict(
+                        # IMPORTANT: We don't want any text dropout; otherwise, the model may fail to follow language
+                        dropout_rate=0.0,
+                    ),
+                ),
+                state_t=11,  # Latent temporal dim (blank, proprio, left wrist, right wrist, primary, action, future proprio, future left wrist, future right wrist, future primary, value)
+                min_num_conditional_frames=5,  # 1 blank, 4 conditioning (proprio, left wrist, right wrist, primary)
+                max_num_conditional_frames=5,  # 1 blank, 4 conditioning (proprio, left wrist, right wrist, primary)
+                sigma_conditional=0.0,  # No noise on conditional latents
+                conditioning_strategy="frame_replace",
+                denoise_replace_gt_frames=True,
+                tokenizer=dict(
+                    chunk_duration=41,  # 1 blank + 40 images (4 proprio, 4 left wrist image, 4 right wrist image, 4 primary image, 4 action, 4 future proprio, 4 future left wrist, 4 future right wrist, 4 future primary, 4 value)
+                ),
+                ema=dict(
+                    enabled=False,
+                ),
+                input_data_key="video",
+                sde=L(HybridEDMSDE)(
+                    hybrid_sigma_distribution=True,
+                    p_mean=1.3862943611198906,  # Copied from base model config
+                    p_std=1.2,
+                    sigma_max=200,
+                    sigma_min=0.01,
+                    uniform_lower=1.0,
+                    uniform_upper=85.0,
+                ),
+                adjust_video_noise=True,
+                resize_online=True,
+                resolution="224",
+                high_sigma_strategy="none",
+            ),
+        ),
+        model_parallel=dict(
+            context_parallel_size=1,
+        ),
+        checkpoint=dict(
+            load_path=get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
+            load_training_state=False,  # This means do not load train state from the base checkpoint above (load_path); but when resuming this job, will load train state
+            strict_resume=False,
+            save_iter=10000,
+            load_ema_to_reg=True,
+            load_from_object_store=dict(
+                enabled=False,
+            ),
+            save_to_object_store=dict(
+                enabled=False,
+            ),
+        ),
+        dataloader_train=L(DataLoader)(
+            num_workers=12,
+            persistent_workers=True,
+            pin_memory=True,
+            dataset=aloha_one_demo_one_episode_dataset,
+            sampler=L(DistributedSampler)(
+                dataset=aloha_one_demo_one_episode_dataset,
+                num_replicas=L(parallel_state.get_data_parallel_world_size)(),
+                rank=L(parallel_state.get_data_parallel_rank)(),
+                shuffle=True,
+                seed=0,
+            ),
+            batch_size=2,
+            drop_last=True,
+        ),
+        job=dict(
+            group="cosmos_v2_finetune",
+            name="cosmos_predict2_2b_480p_aloha_one_demo_one_episode",
+        ),
+        upload_reproducible_setup=False,
+    )
+)
+
 
 # *** EgoVerse Dataset Config ***
 # Mirrors egomimic/hydra_configs/data/debug.yaml:
@@ -664,8 +789,8 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
                 ),
             ),
             run_validation=False,
-            logging_iter=1,
-            max_iter=5,
+            logging_iter=100,
+            max_iter=50000,
             straggler_detection=dict(
                 enabled=False,
             ),
@@ -726,7 +851,7 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
             load_path=get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
             load_training_state=False,
             strict_resume=False,
-            save_iter=1000,
+            save_iter=10000,
             load_ema_to_reg=True,
             load_from_object_store=dict(
                 enabled=False,
@@ -797,6 +922,7 @@ def register_configs():
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__inference_only,
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__resumeFrom50K_648_rollouts_Vsprime_value_func,  # ALOHA planning model
         cosmos_predict2_2b_480p_aloha_185_demos_4_tasks_mixture_foldshirt15_candiesinbowl45_candyinbag45_eggplantchickenonplate80__resumeFrom50K_648_rollouts_Vsprime_value_func__inference_only,
+        cosmos_predict2_2b_480p_aloha_one_demo_one_episode,
         # EgoVerse
         cosmos_predict2_2b_480p_egoverse,  # *** Main checkpoint ***
         cosmos_predict2_2b_480p_egoverse__inference_only,

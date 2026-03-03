@@ -1,0 +1,54 @@
+No CUDA runtime is found, using CUDA_HOME='/usr/local/cuda'
+/coc/flash7/bli678/Projects/EgoVerse/emimic/lib/python3.10/site-packages/megatron/core/inference/unified_memory.py:83: UserWarning: Failed to create unified memory mempool.
+  warnings.warn("Failed to create unified memory mempool.")
+fused_indices_to_multihot has reached end of life. Please migrate to a non-experimental function.
+[03-02 17:49:58|CRITICAL|cosmos_policy/_src/predict2/checkpointer/dcp.py:188:<module>] for the back comptiable pytorch! New DefaultLoadPlanner class is created.
+INFO:cosmos_policy.experiments.robot.robot_utils:Loading model...
+Traceback (most recent call last):
+  File "/nethome/bli678/.local/share/uv/python/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/nethome/bli678/.local/share/uv/python/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/experiments/robot/egoverse/run_egoverse_eval_visualize.py", line 668, in <module>
+    eval_egoverse_visualize()
+  File "/coc/flash7/bli678/Projects/EgoVerse/emimic/lib/python3.10/site-packages/draccus/argparsing.py", line 228, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/experiments/robot/egoverse/run_egoverse_eval_visualize.py", line 592, in eval_egoverse_visualize
+    model, cosmos_config = get_model(cfg)
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/experiments/robot/cosmos_utils.py", line 287, in get_model
+    model, config = load_model_from_checkpoint(
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/_src/predict2/utils/model_loader.py", line 86, in load_model_from_checkpoint
+    config = importlib.import_module(config_module).make_config()
+  File "/nethome/bli678/.local/share/uv/python/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 883, in exec_module
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/config/config.py", line 25, in <module>
+    from cosmos_policy.config.config_v2 import ConfigV2, make_config_v2
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/config/config_v2.py", line 25, in <module>
+    from cosmos_policy._src.predict2.configs.common.defaults.ema import register_ema
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/_src/predict2/configs/common/defaults/ema.py", line 18, in <module>
+    from cosmos_policy._src.predict2.models.text2world_model import EMAConfig
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/_src/predict2/models/text2world_model.py", line 62, in <module>
+    from cosmos_policy._src.predict2.text_encoders.text_encoder import TextEncoder, TextEncoderConfig
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/_src/predict2/text_encoders/text_encoder.py", line 30, in <module>
+    from cosmos_policy._src.predict2.text_encoders.reason1 import QwenVLBaseModel
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/_src/predict2/text_encoders/reason1.py", line 26, in <module>
+    from cosmos_policy._src.reason1.models.vlm_qwen import QwenModel
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/_src/reason1/models/vlm_qwen.py", line 25, in <module>
+    from cosmos_policy._src.reason1.networks.qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel, Qwen2_5_VLModel
+  File "/coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/cosmos_policy/_src/reason1/networks/qwen2_5_vl.py", line 68, in <module>
+    assert is_flash_attn_2_available(), "flash_attn_2 not available. run pip install flash_attn"
+AssertionError: flash_attn_2 not available. run pip install flash_attn
+Using LIBERO constants:
+  NUM_ACTIONS_CHUNK = 16
+  ACTION_DIM = 7
+  PROPRIO_DIM = 9
+If needed, manually set the correct constants in `projects/cosmos/cosmos_policy/constants.py`!
+Loading model...
+Instantiating pretrained Cosmos model...
+flash_attn_2 not available
