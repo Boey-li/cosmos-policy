@@ -49,17 +49,20 @@ source /coc/flash7/bli678/Projects/EgoVerse/emimic/bin/activate
 echo "Starting visualization..."
 python -m cosmos_policy.experiments.robot.egoverse.run_egoverse_eval_visualize \
   --config cosmos_predict2_2b_480p_egoverse \
-  --ckpt_path /coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/logs/cosmos_policy/cosmos_v2_finetune/cosmos_predict2_2b_480p_egoverse_1/checkpoints/iter_000050000 \
+  --ckpt_path /coc/flash7/bli678/Projects/EgoVerse/external/cosmos-policy/logs/cosmos_policy/cosmos_v2_finetune/cosmos_predict2_eva/checkpoints/iter_000060000 \
   --config_file cosmos_policy/config/config.py \
   --chunk_size 25 \
-  --num_denoising_steps 5 \
+  --num_denoising_steps 35 \
+  --ar_future_prediction True \
+  --num_denoising_steps_future_state 35 \
   --seed 195 \
   --deterministic True \
   --run_id_note visualize \
   --episode_indices 0 \
+  --max_episodes 1 \
   --save_video_path ./visualizations \
   --local_log_dir cosmos_policy/experiments/robot/egoverse/logs/ \
-  --video_fps 10
+  --video_fps 10 \
 
 # Cleanup
 echo "Visualization completed at: $(date +%Y-%m-%d_%H-%M-%S)"

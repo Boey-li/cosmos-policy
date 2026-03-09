@@ -89,8 +89,8 @@ cosmos_predict2_2b_480p_libero = LazyDict(
                 ),
             ),
             run_validation=False,
-            logging_iter=10,
-            max_iter=50000,
+            logging_iter=5,
+            max_iter=1000000,
             straggler_detection=dict(
                 enabled=False,
             ),
@@ -723,6 +723,66 @@ cosmos_predict2_2b_480p_aloha_one_demo_one_episode = LazyDict(
 
 
 # *** EgoVerse Dataset Config ***
+
+eva_train_datasets = {
+    "demo": {
+            "_target_":         "egomimic.rldb.utils.S3RLDBDataset",
+            "bucket_name":      "rldb",
+            "mode":             "train",
+            "embodiment":       "eva_bimanual",
+            "filters":          {"task": "cup_on_saucer", "scene": "1"},
+            "local_files_only": True,
+            "use_future":       True,
+            "action_chunk":     25,
+            "is_rollout":       False,   # → rollout_data_mask=0, policy BC loss only
+        },
+        # Rollout dataset – trains world model + value function (rollout_data_mask=1).
+        # For debug we reuse the same demo episode as synthetic rollouts (success=True).
+        # In production, point this at actual robot-rollout data with success/failure labels.
+        "rollout": {
+            "_target_":         "egomimic.rldb.utils.S3RLDBDataset",
+            "bucket_name":      "rldb",
+            "mode":             "train",
+            "embodiment":       "eva_bimanual",
+            "filters":          {"task": "cup_on_saucer", "scene": "1"},
+            "local_files_only": True,
+            "use_future":       True,
+            "action_chunk":     25,
+            "is_rollout":       True,    # → rollout_data_mask=1, WM + VF losses
+            "success":          True,    # all debug rollouts treated as successful
+            "p_world_model":    0.5,     # 50 % WM samples, 50 % VF samples among rollouts
+        },
+}
+
+eva_eval_datasets = {
+    "demo": {
+            "_target_":         "egomimic.rldb.utils.S3RLDBDataset",
+            "bucket_name":      "rldb",
+            "mode":             "total",
+            "embodiment":       "eva_bimanual",
+            "filters":          {"episode_hash": "2025-12-24-19-19-40-723000"},
+            "local_files_only": True,
+            "use_future":       True,
+            "action_chunk":     25,
+            "is_rollout":       False,   # → rollout_data_mask=0, policy BC loss only
+        },
+}
+
+eva_eval_datasets_2 = {
+    "demo": {
+            "_target_":         "egomimic.rldb.utils.S3RLDBDataset",
+            "bucket_name":      "rldb",
+            "mode":             "total",
+            "embodiment":       "eva_bimanual",
+            "filters":          {"episode_hash": "2025-12-24-21-05-54-417000"},
+            "local_files_only": True,
+            "use_future":       True,
+            "action_chunk":     25,
+            "is_rollout":       False,   # → rollout_data_mask=0, policy BC loss only
+        },
+}
+
+
 # Mirrors egomimic/hydra_configs/data/debug.yaml train_datasets block:
 #   demo    block → is_rollout=False  (rollout_data_mask=0)
 #   rollout block → is_rollout=True   (rollout_data_mask=1)
@@ -761,37 +821,11 @@ egoverse_cosmos_policy = L(EgoVerseDataset)(
     proprio_key="observations.state.ee_pose",
     action_key="actions_cartesian",
     # ── Per-dataset config (mirrors debug.yaml train_datasets) ──────────────────
-    train_datasets={
-        # Demonstration dataset – trains the policy (rollout_data_mask=0 for all samples)
-        "demo": {
-            "_target_":         "egomimic.rldb.utils.S3RLDBDataset",
-            "bucket_name":      "rldb",
-            "mode":             "total",
-            "embodiment":       "eva_bimanual",
-            "filters":          {"episode_hash": "2026-01-22-18-57-54-150000"},
-            "local_files_only": True,
-            "use_future":       True,
-            "action_chunk":     25,
-            "is_rollout":       False,   # → rollout_data_mask=0, policy BC loss only
-        },
-        # Rollout dataset – trains world model + value function (rollout_data_mask=1).
-        # For debug we reuse the same demo episode as synthetic rollouts (success=True).
-        # In production, point this at actual robot-rollout data with success/failure labels.
-        "rollout": {
-            "_target_":         "egomimic.rldb.utils.S3RLDBDataset",
-            "bucket_name":      "rldb",
-            "mode":             "total",
-            "embodiment":       "eva_bimanual",
-            "filters":          {"episode_hash": "2026-01-22-18-57-54-150000"},
-            "local_files_only": True,
-            "use_future":       True,
-            "action_chunk":     25,
-            "is_rollout":       True,    # → rollout_data_mask=1, WM + VF losses
-            "success":          True,    # all debug rollouts treated as successful
-            "p_world_model":    0.5,     # 50 % WM samples, 50 % VF samples among rollouts
-        },
-    },
+    train_datasets=eva_eval_datasets_2,
 )
+
+
+
 
 cosmos_predict2_2b_480p_egoverse = LazyDict(
     dict(
@@ -811,7 +845,7 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
             ),
             run_validation=False,
             logging_iter=100,
-            max_iter=100000,
+            max_iter=200000,
             straggler_detection=dict(
                 enabled=False,
             ),
@@ -869,7 +903,7 @@ cosmos_predict2_2b_480p_egoverse = LazyDict(
             context_parallel_size=1,
         ),
         checkpoint=dict(
-            load_path="", #get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
+            load_path=get_checkpoint_path("hf://nvidia/Cosmos-Predict2-2B-Video2World/model-480p-16fps.pt"),
             load_training_state=False,
             strict_resume=False,
             save_iter=10000,

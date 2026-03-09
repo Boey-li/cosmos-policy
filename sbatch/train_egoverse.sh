@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=cosmos_egoverse_train
-#SBATCH --output=sbatch_logs/cosmos_egoverse_train_2.out
-#SBATCH --error=sbatch_logs/cosmos_egoverse_train_2.err
+#SBATCH --job-name=cosmos_eva_train_3
+#SBATCH --output=sbatch_logs/cosmos_eva_train_3.out
+#SBATCH --error=sbatch_logs/cosmos_eva_train_3.err
 #SBATCH --partition="rl2-lab"
 #SBATCH --account="rl2-lab"
 #SBATCH --nodes=1
@@ -47,9 +47,15 @@ source /coc/flash7/bli678/Projects/EgoVerse/emimic/bin/activate
 
 # Run training
 echo "Starting training..."
-torchrun --nproc_per_node=1 -m cosmos_policy.scripts.train \
+
+# torchrun --nproc_per_node=1 --master_port=29500 -m cosmos_policy.scripts.train \
+#   --config=cosmos_policy/config/config.py -- \
+#   experiment="cosmos_predict2_2b_480p_egoverse"
+
+torchrun --nproc_per_node=1 --master_port=29501 -m cosmos_policy.scripts.train \
   --config=cosmos_policy/config/config.py -- \
-  experiment="cosmos_predict2_2b_480p_egoverse"
+  experiment="cosmos_predict2_2b_480p_egoverse" \
+  job.name="cosmos_predict2_eva" 
 
 # Cleanup
 echo "Training completed at: $(date +%Y-%m-%d_%H-%M-%S)"
